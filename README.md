@@ -9,6 +9,8 @@ An application with Source Engine integration through VScript.
 > [!NOTE]
 > SRCBOX cube model is a custom model! You need to install it into your game custom folder otherwise it won't spawn when you press the cube in SourceBox window.
 > It should be this `YOUR_GAME\custom\srcbox\models\props\srcbox\srcbox.mdl`.
+> 
+> You can download it ![here!](https://github.com/Kiverix/srcbox.mdl/releases)
 
 ## Features
 - **Source Engine Bridge**: Spawn the very silly cube directly into Source games 
