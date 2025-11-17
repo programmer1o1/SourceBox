@@ -21,10 +21,10 @@ jobs:
             artifact_name: SourceBox-Linux
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
@@ -36,10 +36,10 @@ jobs:
     
     - name: Build executable
       run: |
-        pyinstaller --onefile --windowed --add-data="assets${{ matrix.os == 'windows-latest' && ';' || ':' }}assets" --icon=assets/images/sourcebox.png --name SourceBox Sourcebox.py
+        pyinstaller --onefile --windowed --add-data "assets${{ matrix.os == 'windows-latest' && ';' || ':' }}assets" --icon=assets/images/sourcebox.png --name SourceBox Sourcebox.py
     
     - name: Upload artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.artifact_name }}
         path: dist/${{ matrix.output_name }}
