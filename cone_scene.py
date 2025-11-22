@@ -106,6 +106,19 @@ class ConeScene:
         self.camera_pos = [-62.78, 28.76, -38.61]
         self.camera_rotation = [17.48, 117.90, 8.88]
         
+        # friend_join sound system
+        self.friend_join_timer = 0.0
+        self.friend_join_active = True
+        self.friend_join_max_duration = 8.0
+        self.friend_join_next_play = random.uniform(1.0, 1.5)
+        self.friend_join_sound_duration = 0.0
+        
+        # get sound duration if available
+        if self.sound_manager:
+            self.friend_join_sound_duration = self.sound_manager.get_sound_duration('cube_click')
+            if self.friend_join_sound_duration == 0:
+                self.friend_join_sound_duration = 1.0  
+        
         # position initial target in camera view
         yaw_rad = math.radians(117.90)
         pitch_rad = math.radians(17.48)
@@ -201,15 +214,28 @@ class ConeScene:
         self.metal_reg_intervals = [0.01, 0.03, 0.09]
         self.metal_reg_interval_index = 0
 
-        try: 
-            # this is closest font i could find unless anomi provides font name for it.
-            self.coord_font = pygame.font.Font('assets/fonts/Cabin-Regular.ttf', 18) 
-            self.coord_font_small = pygame.font.Font('assets/fonts/Cabin-Regular.ttf', 16)  
-            self.coord_font_reg_small = pygame.font.Font('assets/fonts/Cabin-Regular.ttf', 12)  
-            self.loading_font = pygame.font.SysFont('trebuchetms', 20, bold=True)
-        except:
+        try:
+            # use find_resource to locate fonts
+            cabin_font_path = find_resource([
+                'assets/fonts/Cabin-Regular.ttf',
+                'fonts/Cabin-Regular.ttf',
+                'Cabin-Regular.ttf'
+            ])
+            
+            if cabin_font_path:
+                # this is closest font i could find unless anomi provides font name for it.
+                self.coord_font = pygame.font.Font(cabin_font_path, 18) 
+                self.coord_font_small = pygame.font.Font(cabin_font_path, 16)  
+                self.coord_font_reg_small = pygame.font.Font(cabin_font_path, 12)
+                self.loading_font = pygame.font.SysFont('trebuchetms', 20, bold=True)
+            else:
+                # fallback if font not found
+                raise FileNotFoundError("Cabin font not found")
+                
+        except Exception as e:
+            # fallback to default fonts
+            print(f"Font loading failed: {e}, using defaults")
             self.coord_font = pygame.font.Font(None, 18)
-            self.coord_validators_font = pygame.font.Font(None, 16)
             self.coord_font_small = pygame.font.Font(None, 16)
             self.coord_font_reg_small = pygame.font.Font(None, 12)
             self.loading_font = pygame.font.Font(None, 20)
@@ -400,8 +426,16 @@ class ConeScene:
             return spaced_str
         
         try:
-            coord_number_font = pygame.font.Font('assets/fonts/Cabin-Regular.ttf', 23)  
-        except:
+            cabin_font_path = find_resource([
+                'assets/fonts/Cabin-Regular.ttf',
+                'fonts/Cabin-Regular.ttf'
+            ])
+            
+            if cabin_font_path:
+                coord_number_font = pygame.font.Font(cabin_font_path, 23)
+            else:
+                coord_number_font = pygame.font.Font(None, 23)
+        except Exception as e:
             coord_number_font = pygame.font.Font(None, 23)
         
         x_pos_start = 20
@@ -699,6 +733,18 @@ class ConeScene:
         pass
     
     def update(self, dt):
+        # friend_join random sound 
+        if self.friend_join_active and self.sound_manager:
+            self.friend_join_timer += dt
+            
+            if self.friend_join_timer >= self.friend_join_max_duration:
+                self.friend_join_active = False
+            elif self.friend_join_timer >= self.friend_join_next_play:
+                self.sound_manager.play_sound('cube_click')
+                delay = random.uniform(3.0, 5.0)
+                self.friend_join_next_play = self.friend_join_timer + self.friend_join_sound_duration + delay
+    
+    
         # loading effect
         if self.loading_effect_active:
             self.loading_timer += dt

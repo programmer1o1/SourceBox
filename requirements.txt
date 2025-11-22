@@ -1,4 +1,5 @@
 pygame>=2.5.0
 PyOpenGL>=3.1.6
-PyOpenGL-accelerate>=3.1.6
-psutil
+psutil>=5.9.0
+pyinstaller>=6.0.0
+pillow>=10.0.0

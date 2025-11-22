@@ -12,24 +12,10 @@ import psutil
 import traceback
 import random
 
+if platform.system() == 'Windows':
+    import winreg
 
 class SourceBridge:
-    
-    STEAM_PATHS = {
-        'Windows': [
-            r"C:\Program Files (x86)\Steam\steamapps\common",
-            r"D:\Steam\steamapps\common",
-            r"E:\Steam\steamapps\common",
-        ],
-        'Linux': [
-            "~/.steam/steam/steamapps/common",
-            "~/.local/share/Steam/steamapps/common",
-        ],
-        'Darwin': [
-            "~/Library/Application Support/Steam/steamapps/common",
-        ]
-    }
-    
     SUPPORTED_GAMES = {
         'Team Fortress 2': {
             'executables': ['hl2.exe', 'hl2_linux', 'tf_win64.exe', 'tf_linux64'],
@@ -75,7 +61,7 @@ class SourceBridge:
         self.active_game = None
         self.verbose = verbose
         self.command_count = 0
-        self.session_id = int(time.time() * 1000) + random.randint(0, 9999)  # Unique session ID
+        self.session_id = int(time.time() * 1000) + random.randint(0, 9999)
         
         try:
             self._cleanup_old_files()
@@ -108,17 +94,23 @@ class SourceBridge:
     
     def _cleanup_old_files(self):
         """remove stale command/response files from previous sessions"""
-        system = platform.system()
-        steam_paths = self.STEAM_PATHS.get(system, [])
+        # get steam libraries
+        steam_install_path = self._get_steam_install_path()
         
-        for steam_path in steam_paths:
-            steam_path = os.path.expanduser(steam_path)
-            if not os.path.exists(steam_path):
-                continue
-            
+        if not steam_install_path:
+            return
+        
+        steam_libraries = self._parse_library_folders_vdf(steam_install_path)
+        
+        for library_path in steam_libraries:
             for game_name, game_info in self.SUPPORTED_GAMES.items():
                 try:
-                    game_root = os.path.join(steam_path, game_name)
+                    game_root = os.path.join(library_path, 'steamapps', 'common', game_name)
+                    
+                    # try lowercase variant
+                    if not os.path.exists(game_root):
+                        game_root = os.path.join(library_path, 'SteamApps', 'common', game_name)
+                    
                     if not os.path.exists(game_root):
                         continue
                         
@@ -141,14 +133,223 @@ class SourceBridge:
                     if self.verbose:
                         print(f"[warning] cleanup error for {game_name}: {e}")
                     continue
-    
+                    
+    def _get_steam_path_from_process(self):
+        """detect steam installation from running steam process"""
+        try:
+            for proc in psutil.process_iter(['name', 'exe']):
+                try:
+                    proc_name = proc.info['name']
+                    
+                    # look for steam process
+                    if proc_name and proc_name.lower() in ['steam.exe', 'steam', 'steamwebhelper', 'steamos-session']:
+                        exe_path = proc.info.get('exe')
+                        
+                        if exe_path and os.path.exists(exe_path):
+                            # get directory containing steam executable
+                            steam_dir = os.path.dirname(exe_path)
+                            
+                            # verify this is actually steam directory by checking for steamapps
+                            if os.path.exists(os.path.join(steam_dir, 'steamapps')):
+                                self._log(f"found steam from process: {steam_dir}")
+                                return steam_dir
+                            
+                            # on linux, might need to go up one directory
+                            parent_dir = os.path.dirname(steam_dir)
+                            if os.path.exists(os.path.join(parent_dir, 'steamapps')):
+                                self._log(f"found steam from process: {parent_dir}")
+                                return parent_dir
+                                
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+                    
+        except Exception as e:
+            if self.verbose:
+                print(f"[warning] process detection failed: {e}")
+        
+        return None
+        
+    def _get_steam_install_path(self):
+        """get steam installation directory using multiple detection methods"""
+        system = platform.system()
+        
+        if system == 'Windows':
+            import winreg
+            registry_paths = [
+                r"SOFTWARE\Wow6432Node\Valve\Steam",  # 64-bit
+                r"SOFTWARE\Valve\Steam"  # 32-bit
+            ]
+            
+            for reg_path in registry_paths:
+                try:
+                    hkey = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path)
+                    install_path, _ = winreg.QueryValueEx(hkey, "InstallPath")
+                    winreg.CloseKey(hkey)
+                    if install_path and os.path.exists(install_path):
+                        self._log(f"found steam via registry: {install_path}")
+                        return install_path
+                except (FileNotFoundError, OSError):
+                    continue
+            
+            process_path = self._get_steam_path_from_process()
+            if process_path:
+                return process_path
+            
+            common_paths = [
+                r"C:\Program Files (x86)\Steam",
+                r"C:\Program Files\Steam"
+            ]
+            
+            for path in common_paths:
+                if os.path.exists(path):
+                    self._log(f"found steam at default location: {path}")
+                    return path
+            
+            return None
+            
+        elif system == 'Linux':
+            linux_paths = [
+                "~/.local/share/Steam",
+                "~/.steam/steam",
+                "~/.steam/root"
+            ]
+            
+            for path in linux_paths:
+                expanded = os.path.expanduser(path)
+                
+                # resolve symlinks
+                if os.path.islink(expanded):
+                    expanded = os.path.realpath(expanded)
+                
+                if os.path.exists(expanded):
+                    self._log(f"found steam at: {expanded}")
+                    return expanded
+            
+            flatpak_steam = "~/.var/app/com.valvesoftware.Steam/.local/share/Steam"
+            expanded_flatpak = os.path.expanduser(flatpak_steam)
+            
+            if os.path.exists(expanded_flatpak):
+                self._log(f"found flatpak steam at: {expanded_flatpak}")
+                return expanded_flatpak
+            
+            process_path = self._get_steam_path_from_process()
+            if process_path:
+                return process_path
+            
+            return None
+        
+        return None
+        
+    def _get_running_game_library(self, game_name):
+        """detect which steam library the running game is actually in"""
+        try:
+            for proc in psutil.process_iter(['name', 'exe', 'cmdline']):
+                try:
+                    proc_name = proc.info['name']
+                    exe_path = proc.info.get('exe')
+                    cmdline = proc.info['cmdline']
+                    
+                    if not cmdline or not exe_path:
+                        continue
+                    
+                    cmdline_str = ' '.join(cmdline).lower()
+                    game_info = self.SUPPORTED_GAMES.get(game_name)
+                    
+                    if not game_info:
+                        continue
+                    
+                    # check if this is our target game process
+                    if proc_name.lower() in [exe.lower() for exe in game_info['executables']]:
+                        if game_info['cmdline_contains'].lower() in cmdline_str or \
+                           game_info['game_dir'] in cmdline_str:
+                            # found the running game, extract its library path
+                            # exe_path is like: D:\Steam\steamapps\common\Team Fortress 2\hl2.exe
+                            # we need: D:\Steam
+                            
+                            exe_dir = os.path.dirname(exe_path)
+                            
+                            # navigate up to find the Steam library root
+                            # typical structure: LIBRARY/steamapps/common/GAME/executable
+                            current = exe_dir
+                            for _ in range(10):  # safety limit
+                                if os.path.exists(os.path.join(current, 'steamapps')):
+                                    self._log(f"detected running game library: {current}")
+                                    return current
+                                parent = os.path.dirname(current)
+                                if parent == current:  # reached root
+                                    break
+                                current = parent
+                            
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+                    
+        except Exception as e:
+            if self.verbose:
+                print(f"[warning] running game library detection failed: {e}")
+        
+        return None
+        
+    def _parse_library_folders_vdf(self, steam_path):
+        """parse libraryfolders.vdf to get all steam library locations"""
+        # libraryfolders.vdf is in steamapps subfolder
+        vdf_path = os.path.join(steam_path, 'steamapps', 'libraryfolders.vdf')
+        
+        if not os.path.exists(vdf_path):
+            # try lowercase variant on linux
+            vdf_path = os.path.join(steam_path, 'SteamApps', 'libraryfolders.vdf')
+        
+        if not os.path.exists(vdf_path):
+            self._log(f"libraryfolders.vdf not found at {vdf_path}")
+            return [steam_path]
+        
+        libraries = [steam_path]  # main installation is always a library
+        
+        try:
+            with open(vdf_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # parse vdf structure with numbered library entries containing path field
+            import re
+            # match patterns like "path" "D:\\Steam" or "path" "/home/user/Steam"
+            path_pattern = r'"path"\s+"([^"]+)"'
+            matches = re.findall(path_pattern, content)
+            
+            for match in matches:
+                # unescape double backslashes
+                library_path = match.replace('\\\\', '\\')
+                if os.path.exists(library_path) and library_path not in libraries:
+                    libraries.append(library_path)
+                    self._log(f"found library: {library_path}")
+            
+            return libraries
+            
+        except Exception as e:
+            self._log(f"failed to parse libraryfolders.vdf: {e}")
+            return [steam_path]
+        
     def _detect_running_game(self):
         """find which source game is currently running"""
         print("\n" + "="*70)
         print("SOURCE ENGINE BRIDGE")
         print("="*70)
-        print("\n[scan] detecting running games...")
+        print("\n[scan] detecting steam libraries...")
         
+        # get steam install path
+        steam_install_path = self._get_steam_install_path()
+        
+        if not steam_install_path:
+            print("  [error] steam installation not found")
+            print("="*70 + "\n")
+            return
+        
+        print(f"  [steam] {steam_install_path}")
+        
+        # parse all library folders
+        all_steam_libraries = self._parse_library_folders_vdf(steam_install_path)
+        print(f"  [libraries] found {len(all_steam_libraries)} steam libraries")
+        
+        # check for running games
+        print("\n[scan] detecting running games...")
         running_game = None
         retry_count = 0
         max_retries = 3
@@ -194,28 +395,39 @@ class SourceBridge:
         
         if not running_game:
             print("  [info] no running game found, scanning installed games...")
-            self._scan_installed_games()
+            self._scan_installed_games(all_steam_libraries)
         else:
-            if not self._setup_game_path(running_game):
+            # game is running - detect which library it's in
+            active_library = self._get_running_game_library(running_game)
+            
+            if active_library:
+                # prioritize the active library
+                steam_libraries = [active_library]
+                print(f"  [active library] {active_library}")
+            else:
+                # fallback to all libraries
+                steam_libraries = all_steam_libraries
+                print(f"  [warning] couldn't detect active library, checking all libraries")
+            
+            if not self._setup_game_path(running_game, steam_libraries):
                 print(f"[error] failed to locate {running_game} files")
-                self._scan_installed_games()
-    
-    def _setup_game_path(self, game_name):
-        """setup paths for specific game"""
-        system = platform.system()
-        steam_paths = self.STEAM_PATHS.get(system, [])
+                self._scan_installed_games(all_steam_libraries)
+            
+    def _setup_game_path(self, game_name, steam_libraries):
+        """setup paths for specific game using discovered libraries"""
         game_info = self.SUPPORTED_GAMES.get(game_name)
         
         if not game_info:
             print(f"[error] unknown game: {game_name}")
             return False
         
-        for steam_path in steam_paths:
-            steam_path = os.path.expanduser(steam_path)
-            if not os.path.exists(steam_path):
-                continue
+        # games are in library/steamapps/common/
+        for library_path in steam_libraries:
+            game_root = os.path.join(library_path, 'steamapps', 'common', game_name)
             
-            game_root = os.path.join(steam_path, game_name)
+            # try lowercase variant
+            if not os.path.exists(game_root):
+                game_root = os.path.join(library_path, 'SteamApps', 'common', game_name)
             
             if os.path.exists(game_root):
                 try:
@@ -237,6 +449,7 @@ class SourceBridge:
                     self._log(f"session ID: {self.session_id}")
                     
                     print(f"\n[active] {game_name}")
+                    print(f"  library: {library_path}")
                     print(f"  scriptdata: {scriptdata_path}")
                     print(f"  vscripts: {vscripts_path}")
                     
@@ -249,20 +462,17 @@ class SourceBridge:
                     return False
         
         return False
-    
-    def _scan_installed_games(self):
-        """fallback to first installed game if none running"""
-        system = platform.system()
-        steam_paths = self.STEAM_PATHS.get(system, [])
         
-        for steam_path in steam_paths:
-            steam_path = os.path.expanduser(steam_path)
-            if not os.path.exists(steam_path):
-                continue
-            
+    def _scan_installed_games(self, steam_libraries):
+        """fallback to first installed game if none running"""
+        for library_path in steam_libraries:
             for game_name, game_info in self.SUPPORTED_GAMES.items():
                 try:
-                    game_root = os.path.join(steam_path, game_name)
+                    game_root = os.path.join(library_path, 'steamapps', 'common', game_name)
+                    
+                    # try lowercase variant
+                    if not os.path.exists(game_root):
+                        game_root = os.path.join(library_path, 'SteamApps', 'common', game_name)
                     
                     if os.path.exists(game_root):
                         scriptdata_path = os.path.join(game_root, game_info['game_dir'], game_info['scriptdata'])
@@ -273,10 +483,11 @@ class SourceBridge:
                         
                         self.detected_games.append({
                             'name': game_name,
+                            'library': library_path,
                             'scriptdata_path': scriptdata_path,
                             'vscripts_path': vscripts_path
                         })
-                        print(f"  [installed] {game_name}")
+                        print(f"  [installed] {game_name} (in {library_path})")
                 except Exception as e:
                     if self.verbose:
                         print(f"[warning] scan error for {game_name}: {e}")
@@ -294,7 +505,7 @@ class SourceBridge:
             except Exception as e:
                 print(f"[error] failed to setup fallback game: {e}")
         else:
-            print("\n[error] no source engine games found")
+            print("\n[error] no source engine games found in any steam library")
     
     def install_listener(self):
         """write the vscript listener to game folder"""

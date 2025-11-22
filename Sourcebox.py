@@ -634,6 +634,14 @@ class SoundManager:
         except Exception as e:
             print(f"Error loading sound {name}: {e}")
             return False
+
+    def get_sound_duration(self, name):
+        if self.initialized and name in self.sounds:
+            try:
+                return self.sounds[name].get_length()
+            except:
+                return 0.0
+        return 0.0
     
     def load_music(self, filepath):
         if not self.initialized:
@@ -969,6 +977,7 @@ def main():
     sound_manager = SoundManager()
     sound_manager.load_sound('hover', 'assets/sounds/click.wav')
     sound_manager.load_sound('cube_click', 'assets/sounds/friend_join.wav')
+    sound_manager.load_sound('cone_click', 'assets/sounds/cone.wav')  
     sound_manager.load_music('assets/sounds/sourcebox.mp3')
     sound_manager.play_music(loops=-1, volume=0.3)
     
@@ -1076,31 +1085,28 @@ def main():
                             cursor_renderer.enabled = False
                         
                         elif clicked_obj and clicked_obj.type == "cone":
-                            # get screen info
+                            sound_manager.play_sound('cone_click')
+                            
+                            cone_duration = sound_manager.get_sound_duration('cone_click')
+                            if cone_duration > 0:
+                                pygame.time.wait(int(cone_duration * 1000))  
+                            else:
+                                pygame.time.wait(500)  
+                            
                             display_info = pygame.display.Info()
                             screen_width = display_info.current_w
                             screen_height = display_info.current_h
                             
-                            base_width = 548
-                            base_height = 525
+                            new_width = 548
+                            new_height = 525
                             
-                            scale_factor = min(screen_width / 548, screen_height / 525)
-                            scale_factor = max(1.0, scale_factor * 0.8)  # 80% of max to avoid fullscreen
-                            
-                            new_width = int(base_width * scale_factor)
-                            new_height = int(base_height * scale_factor)
-                            
-                            # center the window
                             os.environ['SDL_VIDEO_WINDOW_POS'] = f"{(screen_width - new_width) // 2},{(screen_height - new_height) // 2}"
                             
-                            # resize window
                             screen = pygame.display.set_mode((new_width, new_height), DOUBLEBUF | OPENGL)
                             display = (new_width, new_height)
                             
-                            # update OpenGL viewport
                             glViewport(0, 0, new_width, new_height)
                             
-                            # update scene
                             current_scene = "cone"
                             sound_manager.play_music(loops=-1, volume=0.3)
                             

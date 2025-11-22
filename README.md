@@ -31,7 +31,7 @@ An application with Source Engine integration through VScript.
 ### Option 1: Pre-built Executable (Recommended)
 1. Download the latest release from [Releases](https://github.com/programmer1o1/sourcebox/releases)
 2. Extract the ZIP file
-3. Run `Sourcebox.exe` (Windows) or `./Sourcebox` (Linux)
+3. Run `SourceBox.exe` (Windows) or `./SourceBox` (Linux)
 
 ### Option 2: Manual Installation
 #### Prerequisites
