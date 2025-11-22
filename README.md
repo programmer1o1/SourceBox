@@ -70,7 +70,7 @@ python Sourcebox.py
 - **Left Click**: Interact with objects
   - **Cube**: Spawn the silly cube in-game
   - **Sphere**: Toggle error scene 
-  - **Cone**: Doesn't do anything (for now)
+  - **Cone**: Enter the Voidside tracker mode
 - **ESC**: Exit application 
 
 ### Source Engine Integration

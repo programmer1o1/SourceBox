@@ -11,6 +11,8 @@ from OpenGL.GLU import *
 
 import platform  
 
+from cone_scene import ConeScene
+
 # platform detection
 PLATFORM = platform.system()
 
@@ -1032,6 +1034,7 @@ def main():
     board = Checkerboard()
     ray_caster = RayCaster()
     missing_texture_scene = MissingTextureScene(sound_manager, display_scale)
+    cone_scene = ConeScene(sound_manager, display_scale)
     
     current_scene = "main"
     
@@ -1039,6 +1042,7 @@ def main():
     for obj in objects:
         obj.create_display_list()
     missing_texture_scene.create_display_list()
+    cone_scene.create_display_list()
     
     clock = pygame.time.Clock()
     running = True
@@ -1059,6 +1063,8 @@ def main():
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
+                    if current_scene == "cone":
+                        cone_scene.handle_event(event)
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1 and current_scene == "main":
                         clicked_obj = check_object_click(mouse_pos, ray_caster, objects)
@@ -1068,6 +1074,35 @@ def main():
                             sound_manager.stop_music()
                             pygame.mouse.set_visible(False)
                             cursor_renderer.enabled = False
+                        
+                        elif clicked_obj and clicked_obj.type == "cone":
+                            # get screen info
+                            display_info = pygame.display.Info()
+                            screen_width = display_info.current_w
+                            screen_height = display_info.current_h
+                            
+                            base_width = 548
+                            base_height = 525
+                            
+                            scale_factor = min(screen_width / 548, screen_height / 525)
+                            scale_factor = max(1.0, scale_factor * 0.8)  # 80% of max to avoid fullscreen
+                            
+                            new_width = int(base_width * scale_factor)
+                            new_height = int(base_height * scale_factor)
+                            
+                            # center the window
+                            os.environ['SDL_VIDEO_WINDOW_POS'] = f"{(screen_width - new_width) // 2},{(screen_height - new_height) // 2}"
+                            
+                            # resize window
+                            screen = pygame.display.set_mode((new_width, new_height), DOUBLEBUF | OPENGL)
+                            display = (new_width, new_height)
+                            
+                            # update OpenGL viewport
+                            glViewport(0, 0, new_width, new_height)
+                            
+                            # update scene
+                            current_scene = "cone"
+                            sound_manager.play_music(loops=-1, volume=0.3)
                             
                         elif clicked_obj and clicked_obj.type == "cube":
                             sound_manager.play_sound('cube_click')
@@ -1114,6 +1149,11 @@ def main():
             elif current_scene == "error":
                 missing_texture_scene.update(dt)
                 missing_texture_scene.draw(display[0], display[1])
+
+            elif current_scene == "cone":  
+                cone_scene.update(dt)
+                cone_scene.draw(display[0], display[1])
+                cursor_renderer.draw(mouse_pos, display[0], display[1]) 
             
             pygame.display.flip()
             
@@ -1138,6 +1178,7 @@ def main():
         for obj in objects:
             obj.cleanup()
         missing_texture_scene.cleanup()
+        cone_scene.cleanup()
         
         if bridge and BRIDGE_AVAILABLE and hasattr(bridge, 'active_game') and bridge.active_game:
             try:
