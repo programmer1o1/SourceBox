@@ -41,12 +41,12 @@ jobs:
     - name: Build executable (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        pyinstaller --onefile --windowed --add-data "assets;assets" --exclude-module pkg_resources --icon=assets/images/sourcebox.png --name SourceBox Sourcebox.py
+        pyinstaller --onefile --windowed --add-data "assets;assets" --exclude-module pkg_resources --collect-all OpenGL --icon=assets/images/sourcebox.png --name SourceBox Sourcebox.py
     
     - name: Build executable (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
-        pyinstaller --onefile --windowed --add-data "assets:assets" --exclude-module pkg_resources --icon=assets/images/sourcebox.png --name SourceBox Sourcebox.py
+        pyinstaller --onefile --windowed --add-data "assets:assets" --exclude-module pkg_resources --collect-all OpenGL --icon=assets/images/sourcebox.png --name SourceBox Sourcebox.py
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
