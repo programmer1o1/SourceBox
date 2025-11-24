@@ -986,12 +986,14 @@ def main():
         try:
             bridge = SourceBridge()
             if bridge and bridge.active_game:
-                bridge.install_listener()
-                bridge.install_picker()
-                bridge.install_awp_quit()
-                bridge.setup_mapspawn()
-                bridge.setup_autoexec()
-                bridge.start_listening()
+                # only install vscript features for supported games
+                if bridge.vscripts_path:
+                    bridge.install_listener()
+                    bridge.install_picker()
+                    bridge.install_awp_quit()
+                    bridge.setup_mapspawn()
+                    bridge.setup_autoexec()
+                    bridge.start_listening()
                 
                 print("\n" + "="*70)
                 print("SETUP COMPLETE")
@@ -999,13 +1001,19 @@ def main():
                 print(f"\n[game] {bridge.active_game}")
                 print(f"[session] {bridge.session_id}")
                 print("\n[features]")
-                print("  python bridge - spawn the cube from sourcebox")
-                print("  picker - aimbot (do 'script PickerToggle() and script PickerNext() to select next target')")
-                print("  awp quit - shoot srcbox with awp to quit the game")
-                print("\n[auto-load] all scripts start automatically on map load")
-                print("\n[manual] if needed:")
-                print("         sv_cheats 1")
-                print("         script_execute python_listener")
+                        
+                if bridge.vscripts_path:
+                    print("  python bridge - spawn the cube from sourcebox")
+                    print("  picker - aimbot (script PickerToggle and PickerNext)")
+                    print("  awp quit - shoot srcbox with awp to quit the game")
+                    print("\n[auto-load] all scripts start automatically on map load")
+                    print("\n[manual] if needed:")
+                    print("         script_execute python_listener")
+                else:
+                    print("  source game with no vscript! ONLY srcbox spawn is supported!")
+                    print("  mode: automatic console command injection (however you may have issues with this)")
+                    print("\n[usage] click cube in SourceBox to spawn")
+                
                 print("="*70 + "\n")
         except Exception as e:
             print(f"Bridge initialization error: {e}")

@@ -1,6 +1,6 @@
 """
 Universal Source Engine VScript Bridge
-Connects Python to any Source game with VScript support
+Connects Python to any Source game with VScript support or console
 """
 
 import os
@@ -11,9 +11,24 @@ import platform
 import psutil
 import traceback
 import random
+import re
 
 if platform.system() == 'Windows':
     import winreg
+    try:
+        import win32gui
+        import win32con
+        import win32api
+        import win32process
+        import win32clipboard
+        WINDOWS_API_AVAILABLE = True
+    except ImportError:
+        WINDOWS_API_AVAILABLE = False
+        print("Warning: pywin32 not available - install with: pip install pywin32")
+else:
+    WINDOWS_API_AVAILABLE = False
+    print("Note: Console injection only supported on Windows")
+    print("      Linux users: VScript features work, but sourcemod spawning requires manual console")
 
 class SourceBridge:
     SUPPORTED_GAMES = {
@@ -79,13 +94,7 @@ class SourceBridge:
         """safely perform file operations with error handling"""
         try:
             return operation(filepath)
-        except PermissionError:
-            if self.verbose:
-                print(f"[warning] permission denied: {filepath}")
-            return False
-        except FileNotFoundError:
-            if self.verbose:
-                print(f"[warning] file not found: {filepath}")
+        except (PermissionError, FileNotFoundError):
             return False
         except Exception as e:
             if self.verbose:
@@ -94,9 +103,7 @@ class SourceBridge:
     
     def _cleanup_old_files(self):
         """remove stale command/response files from previous sessions"""
-        # get steam libraries
         steam_install_path = self._get_steam_install_path()
-        
         if not steam_install_path:
             return
         
@@ -106,8 +113,6 @@ class SourceBridge:
             for game_name, game_info in self.SUPPORTED_GAMES.items():
                 try:
                     game_root = os.path.join(library_path, 'steamapps', 'common', game_name)
-                    
-                    # try lowercase variant
                     if not os.path.exists(game_root):
                         game_root = os.path.join(library_path, 'SteamApps', 'common', game_name)
                     
@@ -117,21 +122,14 @@ class SourceBridge:
                     scriptdata_path = os.path.join(game_root, game_info['game_dir'], game_info['scriptdata'])
                     
                     if os.path.exists(scriptdata_path):
-                        files_to_clean = [
-                            "python_command.txt",
-                            "python_response.txt",
-                        ]
-                        
-                        for filename in files_to_clean:
+                        for filename in ["python_command.txt", "python_response.txt"]:
                             filepath = os.path.join(scriptdata_path, filename)
                             self._safe_file_operation(
                                 lambda p: os.remove(p) if os.path.exists(p) else None,
                                 filepath,
                                 f"failed to cleanup {filename}"
                             )
-                except Exception as e:
-                    if self.verbose:
-                        print(f"[warning] cleanup error for {game_name}: {e}")
+                except:
                     continue
                     
     def _get_steam_path_from_process(self):
@@ -140,29 +138,20 @@ class SourceBridge:
             for proc in psutil.process_iter(['name', 'exe']):
                 try:
                     proc_name = proc.info['name']
-                    
-                    # look for steam process
-                    if proc_name and proc_name.lower() in ['steam.exe', 'steam', 'steamwebhelper', 'steamos-session']:
+                    if proc_name and proc_name.lower() in ['steam.exe', 'steam']:
                         exe_path = proc.info.get('exe')
-                        
                         if exe_path and os.path.exists(exe_path):
-                            # get directory containing steam executable
                             steam_dir = os.path.dirname(exe_path)
-                            
-                            # verify this is actually steam directory by checking for steamapps
                             if os.path.exists(os.path.join(steam_dir, 'steamapps')):
                                 self._log(f"found steam from process: {steam_dir}")
                                 return steam_dir
                             
-                            # on linux, might need to go up one directory
                             parent_dir = os.path.dirname(steam_dir)
                             if os.path.exists(os.path.join(parent_dir, 'steamapps')):
                                 self._log(f"found steam from process: {parent_dir}")
                                 return parent_dir
-                                
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
-                    
         except Exception as e:
             if self.verbose:
                 print(f"[warning] process detection failed: {e}")
@@ -174,10 +163,9 @@ class SourceBridge:
         system = platform.system()
         
         if system == 'Windows':
-            import winreg
             registry_paths = [
-                r"SOFTWARE\Wow6432Node\Valve\Steam",  # 64-bit
-                r"SOFTWARE\Valve\Steam"  # 32-bit
+                r"SOFTWARE\Wow6432Node\Valve\Steam",
+                r"SOFTWARE\Valve\Steam"
             ]
             
             for reg_path in registry_paths:
@@ -195,39 +183,22 @@ class SourceBridge:
             if process_path:
                 return process_path
             
-            common_paths = [
-                r"C:\Program Files (x86)\Steam",
-                r"C:\Program Files\Steam"
-            ]
-            
-            for path in common_paths:
+            for path in [r"C:\Program Files (x86)\Steam", r"C:\Program Files\Steam"]:
                 if os.path.exists(path):
                     self._log(f"found steam at default location: {path}")
                     return path
             
-            return None
-            
         elif system == 'Linux':
-            linux_paths = [
-                "~/.local/share/Steam",
-                "~/.steam/steam",
-                "~/.steam/root"
-            ]
-            
-            for path in linux_paths:
+            for path in ["~/.local/share/Steam", "~/.steam/steam", "~/.steam/root"]:
                 expanded = os.path.expanduser(path)
-                
-                # resolve symlinks
                 if os.path.islink(expanded):
                     expanded = os.path.realpath(expanded)
-                
                 if os.path.exists(expanded):
                     self._log(f"found steam at: {expanded}")
                     return expanded
             
             flatpak_steam = "~/.var/app/com.valvesoftware.Steam/.local/share/Steam"
             expanded_flatpak = os.path.expanduser(flatpak_steam)
-            
             if os.path.exists(expanded_flatpak):
                 self._log(f"found flatpak steam at: {expanded_flatpak}")
                 return expanded_flatpak
@@ -235,13 +206,11 @@ class SourceBridge:
             process_path = self._get_steam_path_from_process()
             if process_path:
                 return process_path
-            
-            return None
         
         return None
         
     def _get_running_game_library(self, game_name):
-        """detect which steam library the running game is actually in"""
+        """detect which steam library the running game is in"""
         try:
             for proc in psutil.process_iter(['name', 'exe', 'cmdline']):
                 try:
@@ -258,31 +227,21 @@ class SourceBridge:
                     if not game_info:
                         continue
                     
-                    # check if this is our target game process
                     if proc_name.lower() in [exe.lower() for exe in game_info['executables']]:
                         if game_info['cmdline_contains'].lower() in cmdline_str or \
                            game_info['game_dir'] in cmdline_str:
-                            # found the running game, extract its library path
-                            # exe_path is like: D:\Steam\steamapps\common\Team Fortress 2\hl2.exe
-                            # we need: D:\Steam
-                            
                             exe_dir = os.path.dirname(exe_path)
-                            
-                            # navigate up to find the Steam library root
-                            # typical structure: LIBRARY/steamapps/common/GAME/executable
                             current = exe_dir
-                            for _ in range(10):  # safety limit
+                            for _ in range(10):
                                 if os.path.exists(os.path.join(current, 'steamapps')):
                                     self._log(f"detected running game library: {current}")
                                     return current
                                 parent = os.path.dirname(current)
-                                if parent == current:  # reached root
+                                if parent == current:
                                     break
                                 current = parent
-                            
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
-                    
         except Exception as e:
             if self.verbose:
                 print(f"[warning] running game library detection failed: {e}")
@@ -291,38 +250,30 @@ class SourceBridge:
         
     def _parse_library_folders_vdf(self, steam_path):
         """parse libraryfolders.vdf to get all steam library locations"""
-        # libraryfolders.vdf is in steamapps subfolder
         vdf_path = os.path.join(steam_path, 'steamapps', 'libraryfolders.vdf')
-        
         if not os.path.exists(vdf_path):
-            # try lowercase variant on linux
             vdf_path = os.path.join(steam_path, 'SteamApps', 'libraryfolders.vdf')
         
         if not os.path.exists(vdf_path):
-            self._log(f"libraryfolders.vdf not found at {vdf_path}")
+            self._log(f"libraryfolders.vdf not found")
             return [steam_path]
         
-        libraries = [steam_path]  # main installation is always a library
+        libraries = [steam_path]
         
         try:
             with open(vdf_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            # parse vdf structure with numbered library entries containing path field
-            import re
-            # match patterns like "path" "D:\\Steam" or "path" "/home/user/Steam"
             path_pattern = r'"path"\s+"([^"]+)"'
             matches = re.findall(path_pattern, content)
             
             for match in matches:
-                # unescape double backslashes
                 library_path = match.replace('\\\\', '\\')
                 if os.path.exists(library_path) and library_path not in libraries:
                     libraries.append(library_path)
                     self._log(f"found library: {library_path}")
             
             return libraries
-            
         except Exception as e:
             self._log(f"failed to parse libraryfolders.vdf: {e}")
             return [steam_path]
@@ -334,7 +285,6 @@ class SourceBridge:
         print("="*70)
         print("\n[scan] detecting steam libraries...")
         
-        # get steam install path
         steam_install_path = self._get_steam_install_path()
         
         if not steam_install_path:
@@ -344,88 +294,197 @@ class SourceBridge:
         
         print(f"  [steam] {steam_install_path}")
         
-        # parse all library folders
         all_steam_libraries = self._parse_library_folders_vdf(steam_install_path)
         print(f"  [libraries] found {len(all_steam_libraries)} steam libraries")
         
-        # check for running games
         print("\n[scan] detecting running games...")
         running_game = None
-        retry_count = 0
-        max_retries = 3
+        running_mod = None
+        running_mod_path = None
         
-        while not running_game and retry_count < max_retries:
-            if retry_count > 0:
-                print(f"[retry] attempt {retry_count + 1}/{max_retries}")
-                time.sleep(0.5)
-            
-            try:
-                for proc in psutil.process_iter(['name', 'cmdline', 'exe']):
-                    try:
-                        proc_name = proc.info['name']
-                        cmdline = proc.info['cmdline']
+        try:
+            for proc in psutil.process_iter(['name', 'cmdline', 'exe']):
+                try:
+                    proc_name = proc.info.get('name')
+                    if not proc_name:
+                        continue
+                    
+                    cmdline = proc.info.get('cmdline')
+                    if not cmdline:
+                        continue
+                    
+                    cmdline_str = ' '.join(cmdline)
+                    
+                    # check for supported games first
+                    for game_name, game_info in self.SUPPORTED_GAMES.items():
+                        if proc_name.lower() in [exe.lower() for exe in game_info['executables']]:
+                            if game_info['cmdline_contains'].lower() in cmdline_str.lower() or \
+                               game_info['game_dir'] in cmdline_str.lower():
+                                running_game = game_name
+                                print(f"  [found] {game_name}")
+                                self._log(f"  process: {proc_name}")
+                                break
+                    
+                    if running_game:
+                        break
+                    
+                    # check for hl2.exe with -game argument (source mods)
+                    if proc_name.lower() == 'hl2.exe':
+                        game_paths = []
+                        for i, arg in enumerate(cmdline):
+                            if arg.lower() == '-game' and i + 1 < len(cmdline):
+                                game_arg = cmdline[i + 1].strip('"')
+                                game_paths.append(game_arg)
                         
-                        if not cmdline:
-                            continue
-                        
-                        cmdline_str = ' '.join(cmdline).lower()
-                        
-                        for game_name, game_info in self.SUPPORTED_GAMES.items():
-                            if proc_name.lower() in [exe.lower() for exe in game_info['executables']]:
-                                if game_info['cmdline_contains'].lower() in cmdline_str or \
-                                   game_info['game_dir'] in cmdline_str:
-                                    running_game = game_name
-                                    print(f"  [found] {game_name}")
-                                    self._log(f"  process: {proc_name}")
+                        # look for the one with full path containing 'sourcemods'
+                        for game_path in game_paths:
+                            if 'sourcemods' in game_path.lower():
+                                parts = game_path.replace('\\', '/').split('/')
+                                for i, part in enumerate(parts):
+                                    if part.lower() == 'sourcemods' and i + 1 < len(parts):
+                                        running_mod = parts[i + 1]
+                                        running_mod_path = game_path
+                                        print(f"  [found] Source Mod: {running_mod}")
+                                        print(f"  [process] hl2.exe -game {running_mod_path}")
+                                        break
+                                
+                                if running_mod:
                                     break
                         
-                        if running_game:
+                        if running_mod:
                             break
-                            
-                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                        continue
-                    except Exception as e:
-                        if self.verbose:
-                            print(f"[warning] process check error: {e}")
-                        continue
-            except Exception as e:
-                print(f"[warning] process enumeration error: {e}")
+                        
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+                except Exception as e:
+                    if self.verbose:
+                        print(f"[warning] process check error: {e}")
+                    continue
+        except Exception as e:
+            print(f"[warning] process enumeration error: {e}")
+        
+        if running_mod:
+            if running_mod_path:
+                if self._setup_sourcemod_from_path(running_mod, running_mod_path):
+                    return
+            else:
+                if self._setup_sourcemod_path(running_mod, all_steam_libraries):
+                    return
             
-            retry_count += 1
+            print(f"[warning] found mod '{running_mod}' but couldn't setup paths")
         
         if not running_game:
             print("  [info] no running game found, scanning installed games...")
             self._scan_installed_games(all_steam_libraries)
+            self._scan_sourcemods(all_steam_libraries)
         else:
-            # game is running - detect which library it's in
             active_library = self._get_running_game_library(running_game)
             
             if active_library:
-                # prioritize the active library
                 steam_libraries = [active_library]
                 print(f"  [active library] {active_library}")
             else:
-                # fallback to all libraries
                 steam_libraries = all_steam_libraries
                 print(f"  [warning] couldn't detect active library, checking all libraries")
             
             if not self._setup_game_path(running_game, steam_libraries):
                 print(f"[error] failed to locate {running_game} files")
                 self._scan_installed_games(all_steam_libraries)
+                self._scan_sourcemods(all_steam_libraries)
+    
+    def _setup_sourcemod_from_path(self, mod_name, mod_path):
+        """setup paths for a sourcemod using direct path from process"""
+        try:
+            scriptdata_path = os.path.join(mod_path, 'scriptdata')
+            cfg_path = os.path.join(mod_path, 'cfg')
             
+            os.makedirs(scriptdata_path, exist_ok=True)
+            os.makedirs(cfg_path, exist_ok=True)
+            
+            self.active_game = mod_name
+            self.game_path = scriptdata_path
+            self.vscripts_path = None
+            self.command_file = None
+            
+            print(f"\n[active] Source Mod: {mod_name} (running)")
+            print(f"  mod path: {mod_path}")
+            print(f"  mode: console injection (no VScript)")
+            print("="*70 + "\n")
+            
+            return True
+        except Exception as e:
+            print(f"[error] failed to setup paths: {e}")
+            if self.verbose:
+                traceback.print_exc()
+            return False
+    
+    def _setup_sourcemod_path(self, mod_name, steam_libraries):
+        """setup paths for a sourcemod"""
+        for library_path in steam_libraries:
+            sourcemod_path = os.path.join(library_path, 'steamapps', 'sourcemods', mod_name)
+            if not os.path.exists(sourcemod_path):
+                sourcemod_path = os.path.join(library_path, 'SteamApps', 'sourcemods', mod_name)
+            
+            if os.path.exists(sourcemod_path):
+                return self._setup_sourcemod_from_path(mod_name, sourcemod_path)
+        
+        return False
+    
+    def _scan_sourcemods(self, steam_libraries):
+        """scan for installed source mods in sourcemods folder"""
+        print("\n[scan] detecting Source mods...")
+        
+        for library_path in steam_libraries:
+            sourcemods_path = os.path.join(library_path, 'steamapps', 'sourcemods')
+            if not os.path.exists(sourcemods_path):
+                sourcemods_path = os.path.join(library_path, 'SteamApps', 'sourcemods')
+            
+            if not os.path.exists(sourcemods_path):
+                continue
+            
+            try:
+                for mod_name in os.listdir(sourcemods_path):
+                    mod_path = os.path.join(sourcemods_path, mod_name)
+                    
+                    if os.path.isdir(mod_path):
+                        gameinfo_path = os.path.join(mod_path, 'gameinfo.txt')
+                        if os.path.exists(gameinfo_path):
+                            scriptdata_path = os.path.join(mod_path, 'scriptdata')
+                            os.makedirs(scriptdata_path, exist_ok=True)
+                            
+                            self.detected_games.append({
+                                'name': mod_name,
+                                'library': library_path,
+                                'scriptdata_path': scriptdata_path,
+                                'vscripts_path': None,
+                                'is_sourcemod': True
+                            })
+                            print(f"  [sourcemod] {mod_name} (in {library_path})")
+            except Exception as e:
+                if self.verbose:
+                    print(f"[warning] Error scanning sourcemods: {e}")
+        
+        # if no supported games found, use first sourcemod
+        if not self.active_game and self.detected_games:
+            for game in self.detected_games:
+                if game.get('is_sourcemod'):
+                    print(f"\n[active] using Source Mod: {game['name']} (not running)")
+                    self.active_game = game['name']
+                    self.game_path = game['scriptdata_path']
+                    self.vscripts_path = None
+                    self.command_file = None
+                    print("  mode: console injection (no VScript)")
+                    break
+    
     def _setup_game_path(self, game_name, steam_libraries):
         """setup paths for specific game using discovered libraries"""
         game_info = self.SUPPORTED_GAMES.get(game_name)
-        
         if not game_info:
             print(f"[error] unknown game: {game_name}")
             return False
         
-        # games are in library/steamapps/common/
         for library_path in steam_libraries:
             game_root = os.path.join(library_path, 'steamapps', 'common', game_name)
-            
-            # try lowercase variant
             if not os.path.exists(game_root):
                 game_root = os.path.join(library_path, 'SteamApps', 'common', game_name)
             
@@ -454,7 +513,6 @@ class SourceBridge:
                     print(f"  vscripts: {vscripts_path}")
                     
                     return True
-                    
                 except Exception as e:
                     print(f"[error] failed to setup paths: {e}")
                     if self.verbose:
@@ -469,8 +527,6 @@ class SourceBridge:
             for game_name, game_info in self.SUPPORTED_GAMES.items():
                 try:
                     game_root = os.path.join(library_path, 'steamapps', 'common', game_name)
-                    
-                    # try lowercase variant
                     if not os.path.exists(game_root):
                         game_root = os.path.join(library_path, 'SteamApps', 'common', game_name)
                     
@@ -510,7 +566,8 @@ class SourceBridge:
     def install_listener(self):
         """write the vscript listener to game folder"""
         if not self.vscripts_path:
-            print("[error] no vscripts path available")
+            if self.verbose:
+                print("[info] VScript not supported, skipping listener install")
             return False
         
         vscript_code = self._get_listener_code()
@@ -523,7 +580,6 @@ class SourceBridge:
             print(f"\n[success] listener installed")
             print(f"  {output_file}")
             return True
-            
         except PermissionError:
             print(f"[error] permission denied: {output_file}")
             return False
@@ -536,7 +592,8 @@ class SourceBridge:
     def install_picker(self):
         """install the picker (aimbot) script"""
         if not self.vscripts_path:
-            print("[error] no vscripts path available")
+            if self.verbose:
+                print("[info] VScript not supported, skipping picker install")
             return False
         
         picker_code = r"""
@@ -1141,7 +1198,6 @@ if ("RegisterThinkFunction" in getroottable()) {
             print(f"\n[success] picker installed")
             print(f"  {output_file}")
             return True
-            
         except Exception as e:
             print(f"[error] picker install failed: {e}")
             if self.verbose:
@@ -1151,7 +1207,8 @@ if ("RegisterThinkFunction" in getroottable()) {
     def install_awp_quit(self):
         """install the AWP quit trigger script"""
         if not self.vscripts_path:
-            print("[error] no vscripts path available")
+            if self.verbose:
+                print("[info] VScript not supported, skipping AWP quit install")
             return False
         
         awp_quit_code = r"""
@@ -1338,7 +1395,6 @@ if ("RegisterThinkFunction" in getroottable()) {
             print(f"\n[success] awp quit trigger installed")
             print(f"  {output_file}")
             return True
-            
         except Exception as e:
             print(f"[error] awp quit install failed: {e}")
             if self.verbose:
@@ -1346,7 +1402,7 @@ if ("RegisterThinkFunction" in getroottable()) {
             return False  
             
     def reinstall_awp_outputs(self):
-        """reinstall AWP damage outputs for newly spawned props, this will track all newly spawned props"""
+        """reinstall AWP damage outputs for newly spawned props"""
         if not self.game_path or not self.command_file:
             return False
         
@@ -1371,7 +1427,8 @@ if ("RegisterThinkFunction" in getroottable()) {
     def setup_mapspawn(self):
         """create mapspawn.nut that auto-loads on every map"""
         if not self.vscripts_path:
-            print("[error] no vscripts path")
+            if self.verbose:
+                print("[info] VScript not supported, skipping mapspawn setup")
             return False
         
         mapspawn_file = os.path.join(self.vscripts_path, "mapspawn.nut")
@@ -1426,7 +1483,6 @@ if (worldspawn != null) {
             print(f"\n[success] mapspawn configured")
             print(f"  {mapspawn_file}")
             return True
-            
         except Exception as e:
             print(f"[error] failed to setup mapspawn: {e}")
             if self.verbose:
@@ -1434,13 +1490,21 @@ if (worldspawn != null) {
             return False
     
     def setup_autoexec(self):
-        """create autoexec config to automatically load vscript on game start, just being extra lol"""
+        """create autoexec config to automatically load vscript on game start"""
         if not self.active_game:
             print("[error] no active game")
             return False
         
+        if not self.vscripts_path:
+            if self.verbose:
+                print("[info] VScript not supported, skipping autoexec setup")
+            return False
+        
         try:
-            game_info = self.SUPPORTED_GAMES[self.active_game]
+            game_info = self.SUPPORTED_GAMES.get(self.active_game)
+            if not game_info:
+                return False
+                
             cfg_path = os.path.join(
                 os.path.dirname(self.game_path),
                 'cfg',
@@ -1455,13 +1519,12 @@ script_execute python_listener
 echo "[python] bridge listener auto-loaded"
 """
             
-            # read existing autoexec if present
+            # check if already added
             existing_content = ""
             if os.path.exists(cfg_path):
                 with open(cfg_path, 'r') as f:
                     existing_content = f.read()
                 
-                # check if already added
                 if "python_listener" in existing_content:
                     print(f"\n[info] autoexec already configured")
                     print(f"  {cfg_path}")
@@ -1474,7 +1537,6 @@ echo "[python] bridge listener auto-loaded"
             print(f"\n[success] autoexec configured")
             print(f"  {cfg_path}")
             return True
-            
         except Exception as e:
             print(f"[error] failed to setup autoexec: {e}")
             if self.verbose:
@@ -1482,7 +1544,7 @@ echo "[python] bridge listener auto-loaded"
             return False
         
     def _get_listener_code(self):
-        """generate the vscript listener code with multi-think support"""
+        """generate the vscript listener code"""
         return r'''
 if (!("g_think_functions" in getroottable())) {
     ::g_think_functions <- {};
@@ -1813,13 +1875,11 @@ if (!("g_master_think_active" in getroottable())) {
                 if self.response_file and os.path.exists(self.response_file):
                     try:
                         modified_time = os.path.getmtime(self.response_file)
-                        
                         if modified_time > self.last_response_time:
                             self.last_response_time = modified_time
                             self._handle_response()
                     except (FileNotFoundError, PermissionError):
                         pass
-                
                 time.sleep(0.05)
             except Exception as e:
                 if self.verbose:
@@ -1848,7 +1908,6 @@ if (!("g_master_think_active" in getroottable())) {
                 print(f"  [error] {message}")
             else:
                 print(f"  [response] {status}: {message}")
-                
         except json.JSONDecodeError as e:
             if self.verbose:
                 print(f"[warning] invalid response JSON: {e}")
@@ -1857,8 +1916,8 @@ if (!("g_master_think_active" in getroottable())) {
                 print(f"[warning] response handling error: {e}")
     
     def spawn(self, model_path, distance=200):
-        """send spawn command to game"""
-        if not self.game_path or not self.command_file:
+        """send spawn command to game (auto-detects method)"""
+        if not self.game_path and not self.active_game:
             print("[error] no game configured")
             return False
         
@@ -1866,41 +1925,151 @@ if (!("g_master_think_active" in getroottable())) {
             print("[error] invalid model path")
             return False
         
-        if not isinstance(distance, (int, float)) or distance <= 0:
-            print("[error] invalid distance, using default (200)")
-            distance = 200
+        # check if this is a supported VScript game with command file
+        if self.active_game in self.SUPPORTED_GAMES and self.command_file:
+            # use vscript method
+            if not isinstance(distance, (int, float)) or distance <= 0:
+                distance = 200
+            
+            self.command_count += 1
+            safe_model_path = model_path.replace('\\', '\\\\').replace('"', '\\"')
+            
+            command_json = '{{"command":"spawn_model","model":"{}","distance":{},"id":{},"session":{}}}'.format(
+                safe_model_path,
+                int(distance),
+                self.command_count,
+                self.session_id
+            )
+            
+            print(f"\n[command #{self.command_count}] {model_path}")
+            
+            try:
+                with open(self.command_file, 'w', encoding='ascii', newline='') as f:
+                    f.write(command_json)
+                    f.flush()
+                    os.fsync(f.fileno())
+                
+                time.sleep(0.05)
+                return True
+            except PermissionError:
+                print(f"  [error] permission denied: {self.command_file}")
+                return False
+            except Exception as e:
+                print(f"  [error] {e}")
+                if self.verbose:
+                    traceback.print_exc()
+                return False
+        else:
+            # use legacy console injection method for unsupported games
+            return self.spawn_legacy(model_path)
+    
+    def spawn_legacy(self, model_path):
+        """spawn prop using sendmessage with frozen window (windows only)"""
+        if not self.active_game or platform.system() != 'Windows':
+            return False
         
-        self.command_count += 1
-        
-        # escape special characters in model path
-        safe_model_path = model_path.replace('\\', '\\\\').replace('"', '\\"')
-        
-        # include session ID in every command so that they cannot spawn twice
-        command_json = '{{"command":"spawn_model","model":"{}","distance":{},"id":{},"session":{}}}'.format(
-            safe_model_path,
-            int(distance),
-            self.command_count,
-            self.session_id
-        )
-        
-        print(f"\n[command #{self.command_count}] {model_path}")
+        if not WINDOWS_API_AVAILABLE:
+            return False
         
         try:
-            with open(self.command_file, 'w', encoding='ascii', newline='') as f:
-                f.write(command_json)
-                f.flush()
-                os.fsync(f.fileno())
+            # find hl2.exe window
+            hl2_pid = None
+            for proc in psutil.process_iter(['name', 'pid']):
+                try:
+                    if proc.info['name'].lower() == 'hl2.exe':
+                        hl2_pid = proc.info['pid']
+                        break
+                except:
+                    continue
             
-            time.sleep(0.05)
+            if not hl2_pid:
+                return False
+            
+            def enum_windows_callback(hwnd, windows):
+                if win32gui.IsWindowVisible(hwnd):
+                    _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
+                    if window_pid == hl2_pid:
+                        title = win32gui.GetWindowText(hwnd)
+                        if title:
+                            windows.append((hwnd, title))
+                return True
+            
+            windows = []
+            win32gui.EnumWindows(enum_windows_callback, windows)
+            
+            if not windows:
+                return False
+            
+            game_hwnd = windows[0][0]
+            
+            # freeze window - disable redrawing
+            WM_SETREDRAW = 0x000B
+            win32api.SendMessage(game_hwnd, WM_SETREDRAW, 0, 0)
+            
+            # save user's clipboard
+            original_clipboard = None
+            try:
+                win32clipboard.OpenClipboard()
+                if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT):
+                    original_clipboard = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+                elif win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_TEXT):
+                    original_clipboard = win32clipboard.GetClipboardData(win32clipboard.CF_TEXT)
+                win32clipboard.CloseClipboard()
+            except:
+                pass
+            
+            # set command to clipboard
+            full_command = f'sv_cheats 1; prop_physics_create {model_path}'
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(full_command, win32clipboard.CF_TEXT)
+            win32clipboard.CloseClipboard()
+            
+            # send keys to game window
+            def send_key(vk_code, key_down=True):
+                scan_code = win32api.MapVirtualKey(vk_code, 0)
+                lparam = (scan_code << 16) | 1
+                if not key_down:
+                    lparam |= 0xC0000000
+                msg = win32con.WM_KEYDOWN if key_down else win32con.WM_KEYUP
+                win32api.SendMessage(game_hwnd, msg, vk_code, lparam)
+            
+            VK_OEM_3 = 0xC0  # backtick
+            VK_CONTROL = 0x11
+            VK_V = 0x56
+            VK_RETURN = 0x0D
+            
+            # execute instantly
+            send_key(VK_OEM_3, True)
+            send_key(VK_OEM_3, False)
+            send_key(VK_CONTROL, True)
+            send_key(VK_V, True)
+            send_key(VK_V, False)
+            send_key(VK_CONTROL, False)
+            send_key(VK_RETURN, True)
+            send_key(VK_RETURN, False)
+            send_key(VK_OEM_3, True)
+            send_key(VK_OEM_3, False)
+            
+            # unfreeze window - re-enable redrawing
+            win32api.SendMessage(game_hwnd, WM_SETREDRAW, 1, 0)
+            win32gui.InvalidateRect(game_hwnd, None, True)
+            
+            # restore user's clipboard
+            try:
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                if original_clipboard:
+                    if isinstance(original_clipboard, str):
+                        win32clipboard.SetClipboardText(original_clipboard, win32clipboard.CF_UNICODETEXT)
+                    else:
+                        win32clipboard.SetClipboardData(win32clipboard.CF_TEXT, original_clipboard)
+                win32clipboard.CloseClipboard()
+            except:
+                pass
+            
             return True
-            
-        except PermissionError:
-            print(f"  [error] permission denied: {self.command_file}")
-            return False
-        except Exception as e:
-            print(f"  [error] {e}")
-            if self.verbose:
-                traceback.print_exc()
+        except:
             return False
     
     def stop(self):
@@ -1911,11 +2080,7 @@ if (!("g_master_think_active" in getroottable())) {
             self.watcher_thread.join(timeout=1.0)
         
         try:
-            files_to_cleanup = [
-                self.command_file,
-                self.response_file,
-            ]
-            
+            files_to_cleanup = [self.command_file, self.response_file]
             for filepath in files_to_cleanup:
                 if filepath and os.path.exists(filepath):
                     try:
@@ -1931,12 +2096,14 @@ if __name__ == "__main__":
     bridge = SourceBridge(verbose=False)
     
     if bridge.active_game:
-        bridge.install_listener()
-        bridge.install_picker()     
-        bridge.install_awp_quit()    
-        bridge.setup_mapspawn()
-        bridge.setup_autoexec()
-        bridge.start_listening()
+        # only install VScript features for supported games
+        if bridge.vscripts_path:
+            bridge.install_listener()
+            bridge.install_picker()     
+            bridge.install_awp_quit()    
+            bridge.setup_mapspawn()
+            bridge.setup_autoexec()
+            bridge.start_listening()
         
         print("\n" + "="*70)
         print("SETUP COMPLETE")
@@ -1944,13 +2111,19 @@ if __name__ == "__main__":
         print(f"\n[game] {bridge.active_game}")
         print(f"[session] {bridge.session_id}")
         print("\n[features]")
-        print("  python bridge - spawn the cube from sourcebox")
-        print("  picker - aimbot (do 'script PickerToggle() and script PickerNext() to select next target')")
-        print("  awp quit - shoot srcbox with awp to quit the game")
-        print("\n[auto-load] all scripts start automatically on map load")
-        print("\n[manual] if needed:")
-        print("         sv_cheats 1")
-        print("         script_execute python_listener")
+        
+        if bridge.vscripts_path:
+            print("  python bridge - spawn the cube from sourcebox")
+            print("  picker - aimbot (script PickerToggle and PickerNext)")
+            print("  awp quit - shoot srcbox with awp to quit the game")
+            print("\n[auto-load] all scripts start automatically on map load")
+            print("\n[manual] if needed:")
+            print("         script_execute python_listener")
+        else:
+            print("  source game with no vscript! ONLY srcbox spawn is supported!")
+            print("  mode: automatic console command injection (however you may have issues with this)")
+            print("\n[usage] click cube in SourceBox to spawn")
+        
         print("="*70 + "\n")
     else:
         print("\n[error] no source engine games found\n")
