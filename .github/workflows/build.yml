@@ -59,8 +59,8 @@ jobs:
     - name: Build executable (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
-        pyinstaller --onefile --windowed --name SourceBox --icon=assets/images/sourcebox.png --add-data "assets:assets" --exclude-module pkg_resources --exclude-module setuptools --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --noupx --clean Sourcebox.py
-    
+        pyinstaller --onefile --windowed --name SourceBox --icon=assets/images/sourcebox.png --add-data "assets:assets" --exclude-module pkg_resources --exclude-module setuptools --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --hidden-import=OpenGL.platform.glx --hidden-import=OpenGL.arrays.vbo --collect-all OpenGL --noupx --clean Sourcebox.py    
+        
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
