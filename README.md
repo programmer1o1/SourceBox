@@ -146,7 +146,7 @@ pyinstaller --onefile --windowed --name SourceBox --icon=assets/images/sourcebox
 
 **Linux:**
 ```bash
-pyinstaller --onefile --windowed --name SourceBox --icon=assets/images/sourcebox.png --add-data "assets:assets" --exclude-module pkg_resources --exclude-module setuptools --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --noupx --clean Sourcebox.py
+pyinstaller --onefile --windowed --name SourceBox --icon=assets/images/sourcebox.png --add-data "assets:assets" --exclude-module pkg_resources --exclude-module setuptools --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --hidden-import=OpenGL.platform.glx --hidden-import=OpenGL.arrays.vbo --collect-all OpenGL --noupx --clean Sourcebox.py
 ```
 
 3. The executable will be in the `dist/` folder!
