@@ -10,7 +10,7 @@ An application with Source Engine integration through VScript.
 > SRCBOX cube model is a custom model! You need to install it into your game custom folder otherwise it won't spawn when you press the cube in SourceBox window.
 > It should be this `YOUR_GAME\custom\srcbox\models\props\srcbox\srcbox.mdl`.
 > 
-> You can download it ![here!](https://github.com/Kiverix/srcbox.mdl/releases)
+> You can download it [here!](https://github.com/Kiverix/srcbox.mdl/releases)
 
 ## Features
 - **Source Engine Bridge**: Spawn the very silly cube directly into Source games 
@@ -20,11 +20,18 @@ An application with Source Engine integration through VScript.
 
 ## Supported Games
 
+### VScript Support (Full Features)
 - Team Fortress 2
 - Counter-Strike: Source
 - Day of Defeat: Source
 - Half-Life 2: Deathmatch
 - Half-Life 1 Source: Deathmatch
+
+### Console Injection (Windows Only and Srcbox cube is supported only)
+- Any Source Games that don't have vscipts (usually it's old Source Engine so it's probably hl2.exe or something.)
+
+> [!NOTE]
+> Linux will not work with console injection as this is for Windows only.
 
 ## Installation
 
@@ -77,6 +84,7 @@ python Sourcebox.py
 
 ### Source Engine Integration
 
+#### FOR GAMES WITH VSCIRPTS 
 1. **Automatic Setup**:
    - Launch Sourcebox while a supported game is running
    - Scripts are automatically installed to the game directory `game/scripts/vscripts/`
@@ -98,6 +106,18 @@ bind mouse5 "script PickerNext()"
    - Prop spawns at your crosshair in-game
    - Shoot spawned props with AWP to quit the game (CS:S)
 
+#### FOR GAMES WITH NO VSCRIPTS - WINDOWS ONLY AND ONLY CUBE SPAWNING IS SUPPORTED!
+
+1. **Automatic Detection**:
+   - Launch your Source game
+   - Sourcebox detects it automatically (usually the file name is hl2.exe)
+
+2. **Spawning Props**:
+   - Click the cube in Sourcebox
+   - Console opens, executes commands, closes immediately
+   - Window freezes briefly to hide console
+   - Prop spawns at crosshair
+   
 ## Development
 
 ### Building from Source
@@ -121,12 +141,12 @@ pip install pyinstaller
 
 **Windows:**
 ```bash
-pyinstaller --onefile --windowed --add-data=assets;assets --icon=assets/images/sourcebox.png --name Sourcebox Sourcebox.py
+pyinstaller --onefile --windowed --name SourceBox --icon=assets/images/sourcebox.png --add-data "assets;assets" --exclude-module pkg_resources --exclude-module setuptools --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --noupx --clean Sourcebox.py
 ```
 
 **Linux:**
 ```bash
-pyinstaller --onefile --windowed --add-data=assets:assets --icon=assets/images/sourcebox.png --name Sourcebox Sourcebox.py
+pyinstaller --onefile --windowed --name SourceBox --icon=assets/images/sourcebox.png --add-data "assets:assets" --exclude-module pkg_resources --exclude-module setuptools --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --noupx --clean Sourcebox.py
 ```
 
 3. The executable will be in the `dist/` folder!

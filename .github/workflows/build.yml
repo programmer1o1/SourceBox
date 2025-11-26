@@ -2,8 +2,16 @@ name: Build and Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+  
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+  
   workflow_dispatch:
 
 permissions:
@@ -12,6 +20,11 @@ permissions:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    if: |
+      github.event_name == 'push' || 
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest]
@@ -41,12 +54,12 @@ jobs:
     - name: Build executable (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        pyinstaller --onefile --windowed --add-data "assets;assets" --exclude-module pkg_resources --collect-all OpenGL --icon=assets/images/sourcebox.png --name SourceBox Sourcebox.py
+        pyinstaller --onefile --windowed --name SourceBox --icon=assets/images/sourcebox.png --add-data "assets;assets" --exclude-module pkg_resources --exclude-module setuptools --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --noupx --clean Sourcebox.py
     
     - name: Build executable (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
-        pyinstaller --onefile --windowed --add-data "assets:assets" --exclude-module pkg_resources --collect-all OpenGL --icon=assets/images/sourcebox.png --name SourceBox Sourcebox.py
+        pyinstaller --onefile --windowed --name SourceBox --icon=assets/images/sourcebox.png --add-data "assets:assets" --exclude-module pkg_resources --exclude-module setuptools --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --noupx --clean Sourcebox.py
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -56,8 +69,13 @@ jobs:
     
     - name: Upload to Release
       uses: softprops/action-gh-release@v1
-      if: startsWith(github.ref, 'refs/tags/')
+      if: |
+        startsWith(github.ref, 'refs/tags/') || 
+        (github.event_name == 'push' && github.ref == 'refs/heads/main')
       with:
         files: dist/${{ matrix.output_name }}
+        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+        draft: false
+        prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
