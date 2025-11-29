@@ -164,6 +164,12 @@ class ConeScene:
         self.grey_cones = []
         self.generate_grey_cones()
         
+        # triangle interaction
+        self.triangle_hovered = False
+        self.triangle_scale = 1.0
+        self.triangle_target_scale = 1.0
+        self.triangle_hover_amount = 0.2
+        
         # target switching
         self.target_timer = 0.0
         self.target_switch_interval = random.uniform(0.5, 1.5)
@@ -266,6 +272,40 @@ class ConeScene:
         else:
             self.dot_movement_direction = [0, 1, 0]
 
+    def check_triangle_hover(self, mouse_pos, display_width, display_height):
+        """check if mouse is over the cyan triangle"""
+        center_x = display_width * 0.85
+        center_y = display_height * 0.60
+        size = 50 * 0.5
+        
+        dx = mouse_pos[0] - center_x
+        dy = mouse_pos[1] - center_y
+        distance = math.sqrt(dx*dx + dy*dy)
+        
+        if distance < size * 2.0:  
+            if not self.triangle_hovered:
+                if self.sound_manager:
+                    self.sound_manager.play_sound('hover')
+            self.triangle_hovered = True
+            self.triangle_target_scale = 1.0 + self.triangle_hover_amount
+        else:
+            self.triangle_hovered = False
+            self.triangle_target_scale = 1.0
+            
+    def check_triangle_click(self, mouse_pos, display_width, display_height):
+        """check if triangle was clicked, returns True if should return to main"""
+        center_x = display_width * 0.85
+        center_y = display_height * 0.60
+        size = 50 * 0.5 * self.triangle_scale
+        
+        dx = mouse_pos[0] - center_x
+        dy = mouse_pos[1] - center_y
+        distance = math.sqrt(dx*dx + dy*dy)
+        
+        if distance < size * 2.0:  
+            return True
+        return False
+        
     def draw_cyan_triangle_sprite(self, display_width, display_height):
         # 2d rendering setup
         glMatrixMode(GL_PROJECTION)
@@ -282,11 +322,15 @@ class ConeScene:
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         
-        glColor4f(0.0, 1.0, 1.0, 1.0)
+        # change color when hovered
+        if self.triangle_hovered:
+            glColor4f(1.0, 0.0, 0.0, 1.0)  # red when hovered
+        else:
+            glColor4f(0.0, 1.0, 1.0, 1.0)  # cyan normally
         
         center_x = display_width * 0.85
         center_y = display_height * 0.60
-        size = 50 * 0.5
+        size = 50 * 0.5 * self.triangle_scale  # apply scale
         
         # rotate slightly left
         glTranslatef(center_x, center_y, 0)
@@ -307,7 +351,7 @@ class ConeScene:
         glMatrixMode(GL_PROJECTION)
         glPopMatrix()
         glMatrixMode(GL_MODELVIEW)
-
+        
     def draw_loading_text(self, display_width, display_height):
         text_surface = self.loading_font.render("NG CONNECTION...", True, (150, 0, 0))
         text_data = pygame.image.tostring(text_surface, "RGBA", False)

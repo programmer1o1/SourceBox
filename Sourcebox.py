@@ -971,6 +971,8 @@ def main():
     
     display, screen = init_pygame()
     
+    original_display = display
+    
     display_scale = get_display_scale(display[0], display[1])
     print(f"Display scale factor: {display_scale:.2f}")
     
@@ -1083,61 +1085,102 @@ def main():
                     if current_scene == "cone":
                         cone_scene.handle_event(event)
                 elif event.type == pygame.MOUSEBUTTONDOWN:
-                    if event.button == 1 and current_scene == "main":
-                        clicked_obj = check_object_click(mouse_pos, ray_caster, objects)
+                    if event.button == 1:
+                        if current_scene == "main":
+                            clicked_obj = check_object_click(mouse_pos, ray_caster, objects)
+                            
+                            if clicked_obj and clicked_obj.type == "sphere":
+                                current_scene = "error"
+                                sound_manager.stop_music()
+                                pygame.mouse.set_visible(False)
+                                cursor_renderer.enabled = False
+                            
+                            elif clicked_obj and clicked_obj.type == "cone":
+                                sound_manager.play_sound('cone_click')
+                                
+                                cone_duration = sound_manager.get_sound_duration('cone_click')
+                                if cone_duration > 0:
+                                    pygame.time.wait(int(cone_duration * 1000))  
+                                else:
+                                    pygame.time.wait(500)  
+                                
+                                display_info = pygame.display.Info()
+                                screen_width = display_info.current_w
+                                screen_height = display_info.current_h
+                                
+                                new_width = 548
+                                new_height = 525
+                                
+                                os.environ['SDL_VIDEO_WINDOW_POS'] = f"{(screen_width - new_width) // 2},{(screen_height - new_height) // 2}"
+                                
+                                screen = pygame.display.set_mode((new_width, new_height), DOUBLEBUF | OPENGL)
+                                display = (new_width, new_height)
+                                
+                                glViewport(0, 0, new_width, new_height)
+                                
+                                current_scene = "cone"
+                                sound_manager.play_music(loops=-1, volume=0.3)
+                                
+                            elif clicked_obj and clicked_obj.type == "cube":
+                                sound_manager.play_sound('cube_click')
+                                
+                                if bridge and bridge.active_game:
+                                    try:
+                                        bridge.spawn("props/srcbox/srcbox.mdl", 200)
+                                        time.sleep(0.1) 
+                                        bridge.reinstall_awp_outputs()
+                                    except Exception as e:
+                                        print(f"Bridge spawn error: {e}")
+                                        
+                                if clicked_obj.is_rotating:
+                                    clicked_obj.rotation_angle = 0.0
+                                else:
+                                    clicked_obj.rotation_angle = 0.0
+                                    clicked_obj.is_rotating = True
+                                    clicked_obj.position = [-0.69, 1.43, -1.61]
+                                    clicked_obj.base_rotation = [1422.99, -1461.21, 24.37]
+                                    clicked_obj.scale = 1.22
+                                    clicked_obj.scale_xyz = [1.15, 1.19, 1.19]
                         
-                        if clicked_obj and clicked_obj.type == "sphere":
-                            current_scene = "error"
-                            sound_manager.stop_music()
-                            pygame.mouse.set_visible(False)
-                            cursor_renderer.enabled = False
-                        
-                        elif clicked_obj and clicked_obj.type == "cone":
-                            sound_manager.play_sound('cone_click')
-                            
-                            cone_duration = sound_manager.get_sound_duration('cone_click')
-                            if cone_duration > 0:
-                                pygame.time.wait(int(cone_duration * 1000))  
-                            else:
-                                pygame.time.wait(500)  
-                            
-                            display_info = pygame.display.Info()
-                            screen_width = display_info.current_w
-                            screen_height = display_info.current_h
-                            
-                            new_width = 548
-                            new_height = 525
-                            
-                            os.environ['SDL_VIDEO_WINDOW_POS'] = f"{(screen_width - new_width) // 2},{(screen_height - new_height) // 2}"
-                            
-                            screen = pygame.display.set_mode((new_width, new_height), DOUBLEBUF | OPENGL)
-                            display = (new_width, new_height)
-                            
-                            glViewport(0, 0, new_width, new_height)
-                            
-                            current_scene = "cone"
-                            sound_manager.play_music(loops=-1, volume=0.3)
-                            
-                        elif clicked_obj and clicked_obj.type == "cube":
-                            sound_manager.play_sound('cube_click')
-                            
-                            if bridge and bridge.active_game:
-                                try:
-                                    bridge.spawn("props/srcbox/srcbox.mdl", 200)
-                                    time.sleep(0.1) 
-                                    bridge.reinstall_awp_outputs()
-                                except Exception as e:
-                                    print(f"Bridge spawn error: {e}")
-                                    
-                            if clicked_obj.is_rotating:
-                                clicked_obj.rotation_angle = 0.0
-                            else:
-                                clicked_obj.rotation_angle = 0.0
-                                clicked_obj.is_rotating = True
-                                clicked_obj.position = [-0.69, 1.43, -1.61]
-                                clicked_obj.base_rotation = [1422.99, -1461.21, 24.37]
-                                clicked_obj.scale = 1.22
-                                clicked_obj.scale_xyz = [1.15, 1.19, 1.19]
+                        elif current_scene == "cone":
+                            # check triangle click in cone scene (LEFT-CLICK ONLY)
+                            if cone_scene.check_triangle_click(mouse_pos, display[0], display[1]):
+                                # play friend_join sound
+                                sound_manager.play_sound('cube_click')
+                                
+                                # 3 second delay
+                                pygame.time.wait(3000)
+                                
+                                # return to main menu
+                                current_scene = "main"
+                                
+                                # restore to ORIGINAL display size
+                                display_info = pygame.display.Info()
+                                screen_width = display_info.current_w
+                                screen_height = display_info.current_h
+                                
+                                # center the window with original size
+                                os.environ['SDL_VIDEO_WINDOW_POS'] = f"{(screen_width - original_display[0]) // 2},{(screen_height - original_display[1]) // 2}"
+                                
+                                screen = pygame.display.set_mode(original_display, DOUBLEBUF | OPENGL)
+                                display = original_display
+                                
+                                # restore OpenGL viewport and perspective
+                                glViewport(0, 0, display[0], display[1])
+                                
+                                glMatrixMode(GL_PROJECTION)
+                                glLoadIdentity()
+                                aspect_ratio = display[0] / display[1]
+                                gluPerspective(53.25, aspect_ratio, 0.1, 50.0)
+                                glMatrixMode(GL_MODELVIEW)
+                                
+                                # restore cursor
+                                cursor_renderer.enabled = True
+                                pygame.mouse.set_visible(False)
+                                
+                                # restart music
+                                sound_manager.stop_music()
+                                sound_manager.play_music(loops=-1, volume=0.3)
             
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
             
@@ -1166,9 +1209,10 @@ def main():
 
             elif current_scene == "cone":  
                 cone_scene.update(dt)
+                cone_scene.check_triangle_hover(mouse_pos, display[0], display[1])
                 cone_scene.draw(display[0], display[1])
-                cursor_renderer.draw(mouse_pos, display[0], display[1]) 
-            
+                cursor_renderer.draw(mouse_pos, display[0], display[1])
+
             pygame.display.flip()
             
             frame_count += 1

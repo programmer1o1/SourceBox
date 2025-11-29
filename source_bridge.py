@@ -1558,6 +1558,39 @@ if (!("RegisterThinkFunction" in getroottable())) {
     }
 }
 
+// ensure we silence “SCRIPT PERF WARNING …” 
+if (!("g_perf_filter_ready" in getroottable())) {
+    ::g_perf_filter_ready <- false;
+
+    ::ApplyPerfFilter <- function() {
+        local ok = false;
+        try {
+            SendToConsole("con_filter_enable 1");
+            SendToConsole("con_filter_text_out \"SCRIPT PERF WARNING\"");
+            local cur = Convars.GetStr("con_filter_text_out");
+            if (cur != null && cur.find("SCRIPT PERF WARNING") != null) {
+                ok = true;
+            }
+        } catch(e) {}
+
+        if (!ok) {
+            try {
+                Convars.SetStr("con_filter_enable", "1");
+                Convars.SetStr("con_filter_text_out", "SCRIPT PERF WARNING");
+                ok = true;
+            } catch(e) {}
+        }
+
+        if (ok) {
+            g_perf_filter_ready = true;
+            return null;  
+        }
+        return 0.5;        // retry every 0.5s until it sticks
+    };
+
+    RegisterThinkFunction("perf_filter", ApplyPerfFilter, 0.0);
+}
+
 if (!("UnregisterThinkFunction" in getroottable())) {
     ::UnregisterThinkFunction <- function(name) {
         if (name in g_think_functions) {
