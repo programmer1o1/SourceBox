@@ -38,7 +38,8 @@ An application with Source Engine integration through VScript.
 ### Option 1: Pre-built Executable (Recommended)
 1. Download the latest release from [Releases](https://github.com/programmer1o1/sourcebox/releases)
 2. Extract the ZIP file
-3. Run `SourceBox.exe` (Windows) or `./SourceBox` (Linux)
+3. Run any VScript supported games (TF2, CS:S, HL1S:DM, HL2:DM, DOD:S) before running Sourcebox program.
+4. Run `SourceBox.exe` (Windows) or `./SourceBox` (Linux)
 
 ### Option 2: Manual Installation
 #### Prerequisites
@@ -66,8 +67,9 @@ source myenv/bin/activate
 ```bash
 pip install -r requirements.txt
 ```
-
-4. Run the application:
+4. Run any VScript supported games (TF2, CS:S, HL1S:DM, HL2:DM, DOD:S) before running Sourcebox program.
+ 
+5. Run the application:
 ```bash
 python Sourcebox.py
 ```
