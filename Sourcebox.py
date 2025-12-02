@@ -988,11 +988,12 @@ def main():
         try:
             bridge = SourceBridge()
             if bridge and bridge.active_game:
-                # only install vscript features for supported games
+                # only install VScript features for supported games
                 if bridge.vscripts_path:
                     bridge.install_listener()
-                    bridge.install_picker()
+                    bridge.install_picker()     
                     bridge.install_awp_quit()
+                    bridge.install_auto_spawner()  
                     bridge.setup_mapspawn()
                     bridge.setup_autoexec()
                     bridge.start_listening()
@@ -1003,11 +1004,12 @@ def main():
                 print(f"\n[game] {bridge.active_game}")
                 print(f"[session] {bridge.session_id}")
                 print("\n[features]")
-                        
+                
                 if bridge.vscripts_path:
                     print("  python bridge - spawn the cube from sourcebox")
                     print("  picker - aimbot (script PickerToggle and PickerNext)")
                     print("  awp quit - shoot srcbox with awp to quit the game")
+                    print("  auto-spawner - spawns 3-5 cubes at random locations on map load")
                     print("\n[auto-load] all scripts start automatically on map load")
                     print("\n[manual] if needed:")
                     print("         script_execute python_listener")

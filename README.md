@@ -17,6 +17,7 @@ An application with Source Engine integration through VScript.
 - **Picker (Aimbot)**: Advanced targeting system with manual selection
 - **AWP Quit Trigger**: Shoot spawned props with AWP to quit the game
 - **Auto-load Scripts**: Automatically loads on every map
+- **Auto spawning cube**: Spawn cube on random location of the map.
 
 ## Supported Games
 
