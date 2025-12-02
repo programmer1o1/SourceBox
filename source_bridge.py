@@ -2628,7 +2628,7 @@ if __name__ == "__main__":
             print("  python bridge - spawn the cube from sourcebox")
             print("  picker - aimbot (script PickerToggle and PickerNext)")
             print("  awp quit - shoot srcbox with awp to quit the game")
-            print("  auto-spawner - spawns 3-5 cubes at random locations on map load")
+            print("  auto-spawner - spawns 1 cube at random locations on map load")
             print("\n[auto-load] all scripts start automatically on map load")
             print("\n[manual] if needed:")
             print("         script_execute python_listener")
