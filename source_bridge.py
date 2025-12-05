@@ -61,6 +61,27 @@ class SourceBridge:
             'game_dir': 'hl1mp',
             'scriptdata': 'scriptdata',
             'cmdline_contains': 'Half-Life 1 Source Deathmatch'
+        },
+        'Garry\'s Mod 10': {
+            'executables': ['hl2.exe', 'hl2_linux'],
+            'game_dir': 'garrysmod10classic',
+            'scriptdata': 'data',
+            'cmdline_contains': 'garrysmod10classic',
+            'is_gmod': True
+        },
+        'Garry\'s Mod 11': {
+            'executables': ['hl2.exe', 'hl2_linux'],
+            'game_dir': 'garrysmod',
+            'scriptdata': 'data',
+            'cmdline_contains': 'garrysmod',
+            'is_gmod': True
+        },
+        'Garry\'s Mod 12': {
+            'executables': ['hl2.exe', 'hl2_linux'],
+            'game_dir': 'garrysmod12',
+            'scriptdata': 'data',
+            'cmdline_contains': 'garrysmod12',
+            'is_gmod': True
         }
     }
     
@@ -77,6 +98,7 @@ class SourceBridge:
         self.verbose = verbose
         self.command_count = 0
         self.session_id = int(time.time() * 1000) + random.randint(0, 9999)
+        self.gmod_bridge = None 
         
         try:
             self._cleanup_old_files()
@@ -302,6 +324,8 @@ class SourceBridge:
         running_mod = None
         running_mod_path = None
         
+        running_gmod_dir = None
+        
         try:
             for proc in psutil.process_iter(['name', 'cmdline', 'exe']):
                 try:
@@ -315,8 +339,39 @@ class SourceBridge:
                     
                     cmdline_str = ' '.join(cmdline)
                     
+                    if proc_name.lower() == 'hl2.exe':
+                        for i, arg in enumerate(cmdline):
+                            if arg.lower() == '-game' and i + 1 < len(cmdline):
+                                game_arg = cmdline[i + 1].strip('"').lower()
+                                
+                                # check if it's a gmod sourcemod
+                                if 'garrysmod10classic' in game_arg:
+                                    running_gmod_dir = 'garrysmod10classic'
+                                    running_game = 'Garry\'s Mod 10'
+                                    print(f"  [found] {running_game}")
+                                    if self._setup_gmod_path(running_game, self.SUPPORTED_GAMES[running_game], all_steam_libraries):
+                                        return
+                                    break
+                                elif 'garrysmod12' in game_arg:
+                                    running_gmod_dir = 'garrysmod12'
+                                    running_game = 'Garry\'s Mod 12'
+                                    print(f"  [found] {running_game}")
+                                    if self._setup_gmod_path(running_game, self.SUPPORTED_GAMES[running_game], all_steam_libraries):
+                                        return
+                                    break
+                                elif 'garrysmod' in game_arg and 'garrysmod10' not in game_arg and 'garrysmod12' not in game_arg:
+                                    running_gmod_dir = 'garrysmod'
+                                    running_game = 'Garry\'s Mod 11'
+                                    print(f"  [found] {running_game}")
+                                    if self._setup_gmod_path(running_game, self.SUPPORTED_GAMES[running_game], all_steam_libraries):
+                                        return
+                                    break
+                    
                     # check for supported games first
                     for game_name, game_info in self.SUPPORTED_GAMES.items():
+                        if game_info.get('is_gmod'):
+                            continue  # skip gmod entries in this loop
+                            
                         if proc_name.lower() in [exe.lower() for exe in game_info['executables']]:
                             if game_info['cmdline_contains'].lower() in cmdline_str.lower() or \
                                game_info['game_dir'] in cmdline_str.lower():
@@ -483,6 +538,9 @@ class SourceBridge:
             print(f"[error] unknown game: {game_name}")
             return False
         
+        if game_info.get('is_gmod'):
+            return self._setup_gmod_path(game_name, game_info, steam_libraries)
+        
         for library_path in steam_libraries:
             game_root = os.path.join(library_path, 'steamapps', 'common', game_name)
             if not os.path.exists(game_root):
@@ -518,6 +576,48 @@ class SourceBridge:
                     if self.verbose:
                         traceback.print_exc()
                     return False
+        
+        return False
+    
+    def _setup_gmod_path(self, game_name, game_info, steam_libraries):
+        """setup paths for gmod sourcemod"""
+        for library_path in steam_libraries:
+            sourcemods_path = os.path.join(library_path, 'steamapps', 'sourcemods')
+            if not os.path.exists(sourcemods_path):
+                sourcemods_path = os.path.join(library_path, 'SteamApps', 'sourcemods')
+            
+            if os.path.exists(sourcemods_path):
+                mod_path = os.path.join(sourcemods_path, game_info['game_dir'])
+                
+                if os.path.exists(mod_path):
+                    try:
+                        data_path = os.path.join(mod_path, 'data')
+                        os.makedirs(data_path, exist_ok=True)
+                        
+                        self.active_game = game_name
+                        self.game_path = data_path
+                        self.vscripts_path = None  # gmod uses lua, not vscript
+                        self.command_file = os.path.join(data_path, "sourcebox_command.txt")
+                        self.response_file = os.path.join(data_path, "sourcebox_response.txt")
+                        
+                        try:
+                            from gmod_bridge import GModBridge
+                            self.gmod_bridge = GModBridge()
+                        except ImportError:
+                            print("[warning] gmod_bridge not available")
+                            self.gmod_bridge = None
+                        
+                        print(f"\n[active] {game_name}")
+                        print(f"  library: {library_path}")
+                        print(f"  data: {data_path}")
+                        print(f"  mode: lua bridge")
+                        
+                        return True
+                    except Exception as e:
+                        print(f"[error] failed to setup gmod paths: {e}")
+                        if self.verbose:
+                            traceback.print_exc()
+                        return False
         
         return False
         
@@ -1975,60 +2075,6 @@ if ("RegisterThinkFunction" in getroottable()) {
                 traceback.print_exc()
             return False
         
-    def setup_autoexec(self):
-        """create autoexec config to automatically load vscript on game start"""
-        if not self.active_game:
-            print("[error] no active game")
-            return False
-        
-        if not self.vscripts_path:
-            if self.verbose:
-                print("[info] VScript not supported, skipping autoexec setup")
-            return False
-        
-        try:
-            game_info = self.SUPPORTED_GAMES.get(self.active_game)
-            if not game_info:
-                return False
-                
-            cfg_path = os.path.join(
-                os.path.dirname(self.game_path),
-                'cfg',
-                'autoexec.cfg'
-            )
-            
-            os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
-            
-            autoexec_content = """// python bridge autoexec
-sv_cheats 1
-script_execute python_listener
-echo "[python] bridge listener auto-loaded"
-"""
-            
-            # check if already added
-            existing_content = ""
-            if os.path.exists(cfg_path):
-                with open(cfg_path, 'r') as f:
-                    existing_content = f.read()
-                
-                if "python_listener" in existing_content:
-                    print(f"\n[info] autoexec already configured")
-                    print(f"  {cfg_path}")
-                    return True
-            
-            # append to existing autoexec
-            with open(cfg_path, 'a') as f:
-                f.write("\n" + autoexec_content)
-            
-            print(f"\n[success] autoexec configured")
-            print(f"  {cfg_path}")
-            return True
-        except Exception as e:
-            print(f"[error] failed to setup autoexec: {e}")
-            if self.verbose:
-                traceback.print_exc()
-            return False
-        
     def _get_listener_code(self):
         """generate the vscript listener code"""
         return r'''
@@ -2444,6 +2490,9 @@ if (!("g_master_think_active" in getroottable())) {
             print("[error] invalid model path")
             return False
         
+        if self.gmod_bridge and self.gmod_bridge.is_connected():
+            return self.gmod_bridge.spawn_model(model_path, distance)
+        
         # check if this is a supported VScript game with command file
         if self.active_game in self.SUPPORTED_GAMES and self.command_file:
             # use vscript method
@@ -2484,6 +2533,10 @@ if (!("g_master_think_active" in getroottable())) {
     
     def spawn_legacy(self, model_path):
         """spawn prop using sendmessage with frozen window (windows only)"""
+        if self.active_game and 'Garry\'s Mod' in self.active_game:
+            print("[info] GMod uses Lua bridge, not console injection")
+            return False
+            
         if not self.active_game or platform.system() != 'Windows':
             return False
         
@@ -2601,6 +2654,12 @@ if (!("g_master_think_active" in getroottable())) {
         if self.watcher_thread:
             self.watcher_thread.join(timeout=1.0)
         
+        if self.gmod_bridge and hasattr(self.gmod_bridge, 'cleanup'):
+            try:
+                self.gmod_bridge.cleanup()
+            except:
+                pass
+                
         try:
             files_to_cleanup = [self.command_file, self.response_file]
             for filepath in files_to_cleanup:
@@ -2625,7 +2684,6 @@ if __name__ == "__main__":
             bridge.install_awp_quit()
             bridge.install_auto_spawner()  
             bridge.setup_mapspawn()
-            bridge.setup_autoexec()
             bridge.start_listening()
         
         print("\n" + "="*70)

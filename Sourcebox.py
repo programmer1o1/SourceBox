@@ -40,6 +40,13 @@ except ImportError:
     BRIDGE_AVAILABLE = False
     print("Warning: source_bridge not available")
 
+try:
+    from gmod_bridge import GModBridge
+    GMOD_BRIDGE_AVAILABLE = True
+except ImportError:
+    GMOD_BRIDGE_AVAILABLE = False
+    print("Warning: gmod_bridge not available")
+    
 def get_resource_path(filename):
     """get absolute path to resource file, works for dev and pyinstaller"""
     if hasattr(sys, '_MEIPASS'):
@@ -984,28 +991,41 @@ def main():
     sound_manager.play_music(loops=-1, volume=0.3)
     
     bridge = None
+    gmod_bridge = None
+    
     if BRIDGE_AVAILABLE:
         try:
             bridge = SourceBridge()
             if bridge and bridge.active_game:
-                # only install VScript features for supported games
-                if bridge.vscripts_path:
+                # check if it's a GMod game
+                if 'Garry\'s Mod' in bridge.active_game:
+                    print("\n" + "="*70)
+                    print("SETUP COMPLETE - GARRY'S MOD")
+                    print("="*70)
+                    print(f"\n[game] {bridge.active_game}")
+                    print(f"[session] {bridge.session_id}")
+                    print("\n[features]")
+                    print("  lua bridge - spawn props from SourceBox")
+                    print("  picker - aimbot (picker_toggle, picker_next)")
+                    print("  auto-spawner - spawns cube on map load")
+                    print("\n[usage] click cube in SourceBox to spawn")
+                    print("  [addon] installed to addons/sourcebox/lua/")
+                    print("="*70 + "\n")
+                # only install VScript features for supported Source Engine games
+                elif bridge.vscripts_path:
                     bridge.install_listener()
                     bridge.install_picker()     
                     bridge.install_awp_quit()
                     bridge.install_auto_spawner()  
                     bridge.setup_mapspawn()
-                    bridge.setup_autoexec()
                     bridge.start_listening()
                 
-                print("\n" + "="*70)
-                print("SETUP COMPLETE")
-                print("="*70)
-                print(f"\n[game] {bridge.active_game}")
-                print(f"[session] {bridge.session_id}")
-                print("\n[features]")
-                
-                if bridge.vscripts_path:
+                    print("\n" + "="*70)
+                    print("SETUP COMPLETE - SOURCE ENGINE")
+                    print("="*70)
+                    print(f"\n[game] {bridge.active_game}")
+                    print(f"[session] {bridge.session_id}")
+                    print("\n[features]")
                     print("  python bridge - spawn the cube from sourcebox")
                     print("  picker - aimbot (script PickerToggle and PickerNext)")
                     print("  awp quit - shoot srcbox with awp to quit the game")
@@ -1013,15 +1033,43 @@ def main():
                     print("\n[auto-load] all scripts start automatically on map load")
                     print("\n[manual] if needed:")
                     print("         script_execute python_listener")
+                    print("="*70 + "\n")
                 else:
+                    print("\n" + "="*70)
+                    print("SETUP COMPLETE - SOURCE ENGINE")
+                    print("="*70)
+                    print(f"\n[game] {bridge.active_game}")
+                    print(f"[session] {bridge.session_id}")
+                    print("\n[features]")
                     print("  source game with no vscript! ONLY srcbox spawn is supported!")
-                    print("  mode: automatic console command injection (however you may have issues with this)")
+                    print("  mode: legacy console injection")
                     print("\n[usage] click cube in SourceBox to spawn")
-                
-                print("="*70 + "\n")
+                    print("="*70 + "\n")
         except Exception as e:
             print(f"Bridge initialization error: {e}")
             bridge = None
+    
+    # try GMod bridge if Source Engine bridge not active
+    if GMOD_BRIDGE_AVAILABLE and (not bridge or not bridge.active_game):
+        try:
+            gmod_bridge = GModBridge()
+            if gmod_bridge and gmod_bridge.is_connected():
+                print("\n" + "="*70)
+                print("SETUP COMPLETE - GARRY'S MOD")
+                print("="*70)
+                print(f"\n[game] {gmod_bridge.active_gmod}")
+                print(f"[data path] {gmod_bridge.data_path}")
+                print(f"[session] {gmod_bridge.session_id}")
+                print("\n[features]")
+                print("  python bridge - spawn props from SourceBox")
+                print("  picker - aimbot (picker_toggle, picker_next)")
+                print("  auto-spawner - spawns cube on map load")
+                print("\n[usage] click cube in SourceBox to spawn")
+                print("  [addon] installed to addons/sourcebox/lua/")
+                print("="*70 + "\n")
+        except Exception as e:
+            print(f"GMod bridge initialization error: {e}")
+            gmod_bridge = None
     
     cursor_renderer = CursorRenderer('assets/images/cursor.png')
     cursor_renderer.set_scale(display_scale)
@@ -1126,6 +1174,7 @@ def main():
                             elif clicked_obj and clicked_obj.type == "cube":
                                 sound_manager.play_sound('cube_click')
                                 
+                                # try Source Engine bridge first
                                 if bridge and bridge.active_game:
                                     try:
                                         bridge.spawn("props/srcbox/srcbox.mdl", 200)
@@ -1133,6 +1182,15 @@ def main():
                                         bridge.reinstall_awp_outputs()
                                     except Exception as e:
                                         print(f"Bridge spawn error: {e}")
+                                
+                                # try GMod bridge if VScript source games not available
+                                elif gmod_bridge and gmod_bridge.is_connected():
+                                    try:
+                                        gmod_bridge.spawn_model("props/srcbox/srcbox.mdl", 200)
+                                        # sometimes lua can fail processing it so add this delay
+                                        time.sleep(0.1)
+                                    except Exception as e:
+                                        print(f"GMod bridge spawn error: {e}")
                                         
                                 if clicked_obj.is_rotating:
                                     clicked_obj.rotation_angle = 0.0
@@ -1243,6 +1301,13 @@ def main():
         if bridge and BRIDGE_AVAILABLE and hasattr(bridge, 'active_game') and bridge.active_game:
             try:
                 bridge.stop()
+            except:
+                pass
+        
+        # cleanup GMod bridge
+        if gmod_bridge and GMOD_BRIDGE_AVAILABLE:
+            try:
+                gmod_bridge.cleanup()
             except:
                 pass
         
