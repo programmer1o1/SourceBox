@@ -62,6 +62,13 @@ class SourceBridge:
             'scriptdata': 'scriptdata',
             'cmdline_contains': 'Half-Life 1 Source Deathmatch'
         },
+        'Garry\'s Mod 9': {
+            'executables': ['hl2.exe', 'hl2_linux'],
+            'game_dir': 'gmod9',
+            'scriptdata': 'data',
+            'cmdline_contains': 'gmod9',
+            'is_gmod': True
+        },
         'Garry\'s Mod 10': {
             'executables': ['hl2.exe', 'hl2_linux'],
             'game_dir': 'garrysmod10classic',
@@ -345,7 +352,14 @@ class SourceBridge:
                                 game_arg = cmdline[i + 1].strip('"').lower()
                                 
                                 # check if it's a gmod sourcemod
-                                if 'garrysmod10classic' in game_arg:
+                                if 'gmod9' in game_arg or 'garrysmod9' in game_arg:
+                                    running_gmod_dir = 'gmod9'  
+                                    running_game = 'Garry\'s Mod 9'
+                                    print(f"  [found] {running_game}")
+                                    if self._setup_gmod_path(running_game, self.SUPPORTED_GAMES[running_game], all_steam_libraries):
+                                        return
+                                    break
+                                elif 'garrysmod10classic' in game_arg:
                                     running_gmod_dir = 'garrysmod10classic'
                                     running_game = 'Garry\'s Mod 10'
                                     print(f"  [found] {running_game}")

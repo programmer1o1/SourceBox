@@ -22,11 +22,14 @@ An application with Source Engine integration through VScript and Garry's Mod Lu
 - **Auto-Spawner**: Automatically spawns cube at random locations on map load
 - **Auto-load Scripts**: Scripts automatically load on every map via `mapspawn.nut`
 
-### Lua Features (Garry's Mod 10-12)
+### Lua Features (Garry's Mod 9-12)
 - **Automatic Addon Installation**: Creates addon structure in `addons/sourcebox/lua/`
 - **Picker (Aimbot)**: Silent targeting system (NPCs → Players → Props)
 - **Auto-Spawner**: Spawns cube on map load at random locations
 - **Console Commands**: `picker_toggle`, `picker_next`, `sourcebox_spawn`
+
+> [!NOTE]
+> Picker aimbot script is little bit buggy on GMod 9.
 
 ## Supported Games
 
@@ -42,11 +45,11 @@ An application with Source Engine integration through VScript and Garry's Mod Lu
 ### Garry's Mod Support (Lua Bridge)
 | Version | Lua Bridge | Picker | Auto-Spawn | Notes |
 |---------|------------|--------|------------|-------|
+| GMod 9 | ✅ | ✅ | ✅ | Picker little bit buggy |
 | GMod 10 | ✅ | ✅ | ✅ | Sourcemod |
 | GMod 11 | ✅ | ✅ | ✅ | Sourcemod |
 | GMod 12 | ✅ | ✅ | ✅ | Sourcemod |
 | GMod 13 | 🚧 | 🚧 | 🚧 | Coming soon |
-| GMod 9 | ❌ | ❌ | ❌ | Too primitive |
 
 ### Console Injection (Legacy Support - Windows Only)
 - Works with any Source mod without VScript support or Lua support
@@ -150,12 +153,12 @@ script_execute python_listener
 ### Garry's Mod Integration (Lua)
 
 #### Automatic Setup
-1. Launch GMod 10, 11, or 12 (sourcemod version)
+1. Launch GMod 9 (gmod9), 10 (garrysmod10classic), 11 (garrysmod), or 12 (garrysmod12) (sourcemod version)
 2. Launch SourceBox
 3. Addon automatically installs to:
    - `garrysmod/addons/sourcebox/lua/autorun/sourcebox_init.lua`
    - `garrysmod/addons/sourcebox/lua/autorun/sourcebox/sv_*.lua`
-4. Restart GMod game to load addon on first install
+4. Restart GMod game to load addon on first install (Optional for GMod 9)
 
 #### In-Game Usage
 
@@ -204,7 +207,7 @@ sourcebox_spawn props/srcbox/srcbox.mdl
 - Manually run: `script_execute python_listener`
 
 **GMod addon not working:**
-- Make sure you're using GMod 10, 11, or 12 (sourcemod)
+- Make sure you're using GMod 9, 10, 11, or 12 (sourcemod)
 - Restart GMod after first install
 - Check `garrysmod/addons/sourcebox/` exists
 - Use `lua_run include("autorun/sourcebox_init.lua")` to manually load
