@@ -672,11 +672,11 @@ class SoundManager:
             except:
                 pass
     
-    def play_music(self, loops=-1, volume=0.5):
+    def play_music(self, loops=-1, volume=0.5, start=0.0):
         if self.initialized and self.music_loaded:
             try:
                 pygame.mixer.music.set_volume(max(0.0, min(1.0, volume)))
-                pygame.mixer.music.play(loops)
+                pygame.mixer.music.play(loops, start=start)
             except:
                 pass
     
@@ -987,7 +987,10 @@ def main():
     sound_manager.load_sound('hover', 'assets/sounds/click.wav')
     sound_manager.load_sound('cube_click', 'assets/sounds/friend_join.wav')
     sound_manager.load_sound('cone_click', 'assets/sounds/cone.wav')  
-    sound_manager.load_music('assets/sounds/sourcebox.mp3')
+    sound_manager.load_music('assets/sounds/sourcebox.dll.ogg')
+    # sourcebox album version don't start until like 2 sec for some reason but i am keeping it
+    # until like when person go to voidside tracker or person go back to main menu
+    # when song restarts, it will start 2 sec later so lol
     sound_manager.play_music(loops=-1, volume=0.3)
     
     bridge = None
@@ -1169,7 +1172,7 @@ def main():
                                 glViewport(0, 0, new_width, new_height)
                                 
                                 current_scene = "cone"
-                                sound_manager.play_music(loops=-1, volume=0.3)
+                                sound_manager.play_music(loops=-1, volume=0.3, start=2.0)
                                 
                             elif clicked_obj and clicked_obj.type == "cube":
                                 sound_manager.play_sound('cube_click')
@@ -1240,7 +1243,7 @@ def main():
                                 
                                 # restart music
                                 sound_manager.stop_music()
-                                sound_manager.play_music(loops=-1, volume=0.3)
+                                sound_manager.play_music(loops=-1, volume=0.3, start=2.0)
             
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
             
