@@ -45,19 +45,19 @@ class SourceBridge:
             'cmdline_contains': 'Counter-Strike Source'
         },
         'Day of Defeat Source': {
-            'executables': ['hl2.exe', 'hl2_linux', 'dod.exe', 'dod_win64.exe'],
+            'executables': ['hl2.exe', 'hl2_linux', 'dod.exe', 'dod_win64.exe', 'dod_linux64'],
             'game_dir': 'dod',
             'scriptdata': 'scriptdata',
             'cmdline_contains': 'Day of Defeat Source'
         },
         'Half-Life 2 Deathmatch': {
-            'executables': ['hl2.exe', 'hl2_linux', 'hl2mp.exe', 'hl2mp_win64.exe'],
+            'executables': ['hl2.exe', 'hl2_linux', 'hl2mp.exe', 'hl2mp_win64.exe', 'hl2mp_linux64'],
             'game_dir': 'hl2mp',
             'scriptdata': 'scriptdata',
             'cmdline_contains': 'Half-Life 2 Deathmatch'
         },
         'Half-Life 1 Source Deathmatch': {
-            'executables': ['hl2.exe', 'hl2_linux', 'hl1mp.exe', 'hl1mp_win64.exe'],
+            'executables': ['hl2.exe', 'hl2_linux', 'hl1mp.exe', 'hl1mp_win64.exe', 'hl1mp_linux64'],
             'game_dir': 'hl1mp',
             'scriptdata': 'scriptdata',
             'cmdline_contains': 'Half-Life 1 Source Deathmatch'
