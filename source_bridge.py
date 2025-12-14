@@ -1323,8 +1323,8 @@ if ("RegisterThinkFunction" in getroottable()) {
         if not self.vscripts_path:
             if self.verbose:
                 print("[info] VScript not supported, skipping AWP quit install")
-        return False
-    
+            return False
+
         awp_quit_code = r"""
 if (!("g_tracked_props" in getroottable())) {
     ::g_tracked_props <- [];
@@ -1350,13 +1350,13 @@ if (!("g_tracked_props" in getroottable())) {
                     break
                 }
             }
-            
+
             if (!already_tracked) {
                 g_tracked_props.append(prop)
             }
         }
     }
-    
+
     prop = null
     while ((prop = Entities.FindByClassname(prop, "prop_dynamic")) != null) {
         local model = prop.GetModelName()
@@ -1368,7 +1368,7 @@ if (!("g_tracked_props" in getroottable())) {
                     break
                 }
             }
-            
+
             if (!already_tracked) {
                 g_tracked_props.append(prop)
             }
@@ -1388,66 +1388,66 @@ if (!("g_tracked_props" in getroottable())) {
                     break
                 }
             }
-            
+
             if (!already_tracked) {
                 g_tracked_props.append(prop)
-                
+
                 prop.ValidateScriptScope()
                 local scope = prop.GetScriptScope()
                 scope.last_health <- prop.GetHealth()
             }
         }
     }
-    
+
     foreach (idx, prop in g_tracked_props) {
         if (prop == null || !prop.IsValid()) {
             g_tracked_props.remove(idx)
             continue
         }
-        
+
         prop.ValidateScriptScope()
         local scope = prop.GetScriptScope()
-        
+
         if (!("last_health" in scope)) {
             scope.last_health <- prop.GetHealth()
         }
-        
+
         local current_health = prop.GetHealth()
-        
+
         if (current_health < scope.last_health) {
             CheckAttackerWeapon(prop)
             scope.last_health <- current_health
         }
     }
-    
+
     return 0.1
 }
 
 ::CheckAttackerWeapon <- function(damaged_prop) {
     local host = null
     try { host = GetListenServerHost() } catch(e) {}
-    if (host == null) { 
-        try { host = Entities.FindByClassname(null, "player") } catch(e) {} 
+    if (host == null) {
+        try { host = Entities.FindByClassname(null, "player") } catch(e) {}
     }
-    
+
     if (host == null) return
-    
+
     local player = null
     while ((player = Entities.FindByClassname(player, "player")) != null) {
         if (player != host) continue
-        
-        // use netprops to get active weapon 
+
+        // use netprops to get active weapon
         local active_weapon = null
         try {
             active_weapon = NetProps.GetPropEntity(player, "m_hActiveWeapon")
         } catch(e) {
             continue
         }
-        
+
         if (active_weapon == null || !active_weapon.IsValid()) {
             continue
         }
-        
+
         // check if the active weapon classname matches awp
         local weapon_classname = null
         try {
@@ -1455,11 +1455,11 @@ if (!("g_tracked_props" in getroottable())) {
         } catch(e) {
             continue
         }
-        
+
         if (weapon_classname == null) {
             continue
         }
-        
+
         foreach (awp_class in awp_weapon_classes) {
             if (weapon_classname == awp_class) {
                 EntFireByHandle(damaged_prop, "RunScriptCode", "QuitGame()", 0.1, null, null)
@@ -1494,16 +1494,16 @@ if ("RegisterThinkFunction" in getroottable()) {
             RegisterThinkFunction("awp_quit", CheckPropDamage, 0.0)
         }
     }
-    
+
     DoEntFire("worldspawn", "RunScriptCode", "DelayedRegisterAWP()", 1.5, null, null)
 }
 """
         output_file = os.path.join(self.vscripts_path, "awp_quit_trigger.nut")
-        
+
         try:
             with open(output_file, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(awp_quit_code)
-            
+
             print(f"\n[success] awp quit trigger installed")
             print(f"  {output_file}")
             return True
@@ -1512,6 +1512,7 @@ if ("RegisterThinkFunction" in getroottable()) {
             if self.verbose:
                 traceback.print_exc()
             return False
+
             
     def reinstall_awp_outputs(self):
         """reinstall AWP damage outputs for newly spawned props"""
