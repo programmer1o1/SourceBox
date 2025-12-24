@@ -1,6 +1,6 @@
 """
-Garry's Mod Bridge for SourceBox (GMod 9-12)
-Automatically installs Lua addon to sourcemods
+Garry's Mod Bridge for SourceBox (GMod 9-13)
+Automatically installs Lua addon to sourcemods and retail installs
 """
 
 import os
@@ -17,6 +17,15 @@ class GModBridge:
         'garrysmod10classic': 'GMod 10 Classic',
         'garrysmod': 'GMod 11',
         'garrysmod12': 'GMod 12'
+    }
+
+    # retail gmod 13 install (steamapps/common/GarrysMod/garrysmod)
+    GMOD_RETAIL = {
+        'gmod13': {
+            'name': 'GMod 13',
+            'install_dir': 'GarrysMod',
+            'game_dir': 'garrysmod'
+        }
     }
     
     def __init__(self):
@@ -131,6 +140,16 @@ class GModBridge:
             return libraries
         except:
             return [steam_path]
+
+    def _get_retail_gmod_path(self, library_path):
+        """return retail gmod13 garrysmod directory if it exists"""
+        retail_info = self.GMOD_RETAIL['gmod13']
+        for steamapps_dir in ['steamapps', 'SteamApps']:
+            game_root = os.path.join(library_path, steamapps_dir, 'common', retail_info['install_dir'])
+            mod_path = os.path.join(game_root, retail_info['game_dir'])
+            if os.path.exists(mod_path):
+                return mod_path
+        return None
     
     def _detect_gmod(self):
         """detect gmod installation"""
@@ -155,6 +174,7 @@ class GModBridge:
         
         running_gmod = self._detect_running_gmod()
         
+        # first scan sourcemod variants (gmod 9-12)
         for library_path in all_libraries:
             sourcemods_path = os.path.join(library_path, 'steamapps', 'sourcemods')
             if not os.path.exists(sourcemods_path):
@@ -176,13 +196,32 @@ class GModBridge:
                         os.makedirs(data_path, exist_ok=True)
                         
                         if running_gmod and running_gmod == mod_folder:
-                            self._setup_paths(data_path, addon_path, mod_name, is_gmod9)
+                            self._setup_paths(data_path, addon_path, mod_name, is_gmod9, mod_folder)
                             self._install_lua_addon()
                             print(f"  [found] {mod_name} (RUNNING)")
                             print(f"  [library] {library_path}")
                             return
                         elif not self.active_gmod:
                             print(f"  [installed] {mod_name} (in {library_path})")
+
+        # then scan retail gmod 13 install
+        for library_path in all_libraries:
+            retail_path = self._get_retail_gmod_path(library_path)
+            if not retail_path:
+                continue
+            
+            data_path = os.path.join(retail_path, 'data')
+            addon_path = os.path.join(retail_path, 'addons', 'sourcebox')
+            os.makedirs(data_path, exist_ok=True)
+            
+            if running_gmod in ['gmod13', 'garrysmod']:
+                self._setup_paths(data_path, addon_path, self.GMOD_RETAIL['gmod13']['name'], False, 'gmod13')
+                self._install_lua_addon()
+                print(f"  [found] {self.GMOD_RETAIL['gmod13']['name']} (RUNNING)")
+                print(f"  [library] {library_path}")
+                return
+            elif not self.active_gmod:
+                print(f"  [installed] {self.GMOD_RETAIL['gmod13']['name']} (in {library_path})")
                             
     def _detect_running_gmod(self):
         """detect running gmod"""
@@ -198,21 +237,31 @@ class GModBridge:
                         continue
                     
                     cmdline_str = ' '.join(cmdline).lower()
+                    exe_path = proc.info.get('exe') or ''
+                    exe_lower = exe_path.lower()
+                    proc_lower = proc_name.lower()
                     
-                    # check for hl2.exe with -game argument (sourcemods)
-                    if proc_name.lower() == 'hl2.exe':
+                    # hl2 based binaries or gmod specific binaries
+                    if proc_lower in ['hl2.exe', 'hl2_linux', 'gmod.exe', 'gmod', 'gmod64', 'gmod32', 'gmod_linux']:
                         for i, arg in enumerate(cmdline):
                             if arg.lower() == '-game' and i + 1 < len(cmdline):
                                 game_arg = cmdline[i + 1].strip('"').lower()
                                 
-                                if 'gmod9' in game_arg:
+                                if 'gmod9' in game_arg or 'garrysmod9' in game_arg:
                                     return 'gmod9'
                                 elif 'garrysmod12' in game_arg:
                                     return 'garrysmod12'
                                 elif 'garrysmod10classic' in game_arg:
                                     return 'garrysmod10classic'
-                                elif 'garrysmod' in game_arg: 
-                                    return 'garrysmod'
+                                elif 'garrysmod' in game_arg:
+                                    # differentiate sourcemod vs retail by path hint
+                                    if 'sourcemods' in game_arg or 'sourcemods' in exe_lower:
+                                        return 'garrysmod'
+                                    return 'gmod13'
+                        
+                        # fallback: detect retail gmod if binary path clearly in GarrysMod
+                        if 'garrysmod' in exe_lower and 'sourcemods' not in exe_lower:
+                            return 'gmod13'
                         
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
@@ -221,12 +270,13 @@ class GModBridge:
         
         return None
         
-    def _setup_paths(self, data_path, addon_path, gmod_name, is_gmod9=False):
+    def _setup_paths(self, data_path, addon_path, gmod_name, is_gmod9=False, gmod_version=None):
         """setup paths"""
         self.data_path = data_path
         self.addon_path = addon_path
         self.active_gmod = gmod_name
         self.is_gmod9 = is_gmod9
+        self.gmod_version = gmod_version or ('gmod9' if is_gmod9 else None)
         self.command_file = os.path.join(data_path, "sourcebox_command.txt")
         self.response_file = os.path.join(data_path, "sourcebox_response.txt")
         
@@ -276,9 +326,21 @@ class GModBridge:
                 sourcebox_path = os.path.join(autorun_path, 'sourcebox')
                 
                 os.makedirs(sourcebox_path, exist_ok=True)
-                
-                # write info.txt
-                info_content = '''sourcebox
+                # write addon metadata
+                if self.gmod_version == 'gmod13':
+                    addon_content = '''"AddonInfo"
+{
+	"name"		"SourceBox"
+	"version"	"1.0"
+	"author_name"	"SourceBox Team"
+	"info"		"Python bridge for Garry's Mod"
+	"override"	"0"
+}
+'''
+                    with open(os.path.join(self.addon_path, 'addon.txt'), 'w') as f:
+                        f.write(addon_content)
+                else:
+                    info_content = '''sourcebox
 {
 	name		"SourceBox"
 	version		"1.0"
@@ -286,8 +348,8 @@ class GModBridge:
 	info		"Python bridge for Garry's Mod"
 }
 '''
-                with open(os.path.join(self.addon_path, 'info.txt'), 'w') as f:
-                    f.write(info_content)
+                    with open(os.path.join(self.addon_path, 'info.txt'), 'w') as f:
+                        f.write(info_content)
                 
                 # write sourcebox_init.lua
                 init_content = self._get_init_lua()

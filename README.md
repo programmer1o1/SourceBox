@@ -22,7 +22,7 @@ An application with Source Engine integration through VScript and Garry's Mod Lu
 - **Auto-Spawner**: Automatically spawns cube at random locations on map load
 - **Auto-load Scripts**: Scripts automatically load on every map via `mapspawn.nut`
 
-### Lua Features (Garry's Mod 9-12)
+### Lua Features (Garry's Mod 9-13)
 - **Automatic Addon Installation**: Creates addon structure in `addons/sourcebox/lua/`
 - **Picker (Aimbot)**: Silent targeting system (NPCs → Players → Props)
 - **Auto-Spawner**: Spawns cube on map load at random locations
@@ -42,6 +42,16 @@ An application with Source Engine integration through VScript and Garry's Mod Lu
 | Half-Life 2: Deathmatch | ✅ | ✅ | ✅ | ✅ | AWP Quit only for CS:S |
 | Half-Life 1 Source: Deathmatch | ✅ | ✅ | ✅ | ✅ | AWP Quit only for CS:S |
 
+### Mapbase Support (Enhanced VScript)
+| Game/Mod | VScript | Picker | Auto-Spawn | Notes |
+|----------|---------|--------|------------|-------|
+| Entropy Zero 2 | ✅ | ✅ | ✅ | Standalone game |
+| Raising the Bar: Redux | ✅ | ✅ | ✅ | Sourcemod |
+| Any Mapbase mod | ✅ | ✅ | ✅ | Auto-detected |
+
+> [!NOTE]
+> Mapbase mods are automatically detected whether they're standalone games or sourcemods. The system checks for a `mapbase` folder in the game directory.
+
 ### Garry's Mod Support (Lua Bridge)
 | Version | Lua Bridge | Picker | Auto-Spawn | Notes |
 |---------|------------|--------|------------|-------|
@@ -49,7 +59,7 @@ An application with Source Engine integration through VScript and Garry's Mod Lu
 | GMod 10 | ✅ | ✅ | ✅ | Sourcemod |
 | GMod 11 | ✅ | ✅ | ✅ | Sourcemod |
 | GMod 12 | ✅ | ✅ | ✅ | Sourcemod |
-| GMod 13 | 🚧 | 🚧 | 🚧 | Coming soon |
+| GMod 13 | ✅ | ✅ | ✅ | Retail install |
 
 ### Console Injection (Legacy Support - Windows Only)
 - Works with any Source mod without VScript support or Lua support
@@ -111,13 +121,18 @@ python Sourcebox.py
 ### Source Engine Integration (VScript)
 
 #### Automatic Setup
-1. Launch a supported Source game (TF2, CS:S, DOD:S, HL2:DM, HL1S:DM)
+1. Launch a supported Source game (TF2, CS:S, DOD:S, HL2:DM, HL1S:DM) or any Mapbase mod
 2. Launch SourceBox
 3. Scripts automatically install to:
    - `game/scripts/vscripts/python_listener.nut`
    - `game/scripts/vscripts/picker.nut`
    - `game/scripts/vscripts/auto_spawner.nut`
-   - `game/scripts/vscripts/mapspawn.nut`
+   - `game/scripts/vscripts/vscript_server.nut` (Mapbase only)
+
+**For Mapbase mods:**
+- Files are stored in `vscript_io/` instead of `scriptdata/`
+- Uses Mapbase-specific VScript API
+- Auto-loads via `vscript_server.nut`
 
 #### In-Game Usage
 
@@ -145,15 +160,23 @@ bind kp_plus "script PickerToggle()"
 - Only works in CS:S
 
 **Manual Script Loading** (if auto-load fails):
+
+**TF2 branch of Source Engine:**
 ```
 sv_cheats 1
 script_execute python_listener
 ```
 
+**Mapbase:**
+```
+exec mapbase_default
+script_execute vscript_server
+```
+
 ### Garry's Mod Integration (Lua)
 
 #### Automatic Setup
-1. Launch GMod 9 (gmod9), 10 (garrysmod10classic), 11 (garrysmod), or 12 (garrysmod12) (sourcemod version)
+1. Launch GMod 9 (gmod9), 10 (garrysmod10classic), 11 (garrysmod), 12 (garrysmod12) (sourcemod version), or retail GMod 13 (GarrysMod/garrysmod)
 2. Launch SourceBox
 3. Addon automatically installs to:
    - `garrysmod/addons/sourcebox/lua/autorun/sourcebox_init.lua`
@@ -288,6 +311,13 @@ sourcebox_spawn props/yourmod/model.mdl 300
 - **Files**: `python_command.txt`, `python_response.txt`
 - **Format**: JSON with session ID and command counter
 - **Rate**: Commands checked every 100ms
+
+### Mapbase VScript Communication
+- **Method**: File I/O via `vscript_io/` folder (Mapbase-specific)
+- **Files**: `python_command.txt`, `python_response.txt`
+- **Format**: JSON with session ID and command counter
+- **Rate**: Commands checked every 100ms
+- **Detection**: Automatic via `mapbase/` folder presence
 
 ### Lua Communication (GMod)
 - **Method**: File I/O via `data/` folder

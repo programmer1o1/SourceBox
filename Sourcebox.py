@@ -1016,13 +1016,16 @@ def main():
                     print("="*70 + "\n")
                 # only install VScript features for supported Source Engine games
                 elif bridge.vscripts_path:
-                    bridge.install_listener()
-                    bridge.install_picker()     
-                    bridge.install_awp_quit()
-                    bridge.install_auto_spawner()  
-                    bridge.setup_mapspawn()
+                    # check if Mapbase - scripts already installed by MapbaseBridge
+                    if bridge.mapbase_bridge is None:
+                        bridge.install_listener()
+                        bridge.install_picker()     
+                        bridge.install_awp_quit()
+                        bridge.install_auto_spawner()  
+                        bridge.setup_mapspawn()
+                    
                     bridge.start_listening()
-                
+
                     print("\n" + "="*70)
                     print("SETUP COMPLETE - SOURCE ENGINE")
                     print("="*70)
@@ -1035,7 +1038,11 @@ def main():
                     print("  auto-spawner - spawns 1 cube at random locations on map load")
                     print("\n[auto-load] all scripts start automatically on map load")
                     print("\n[manual] if needed:")
-                    print("         script_execute python_listener")
+                    if bridge.mapbase_bridge:
+                        print("         exec mapbase_default")
+                        print("         script_execute vscript_server")
+                    else:
+                        print("         script_execute python_listener")
                     print("="*70 + "\n")
                 else:
                     print("\n" + "="*70)
@@ -1044,10 +1051,14 @@ def main():
                     print(f"\n[game] {bridge.active_game}")
                     print(f"[session] {bridge.session_id}")
                     print("\n[features]")
-                    print("  source game with no vscript! ONLY srcbox spawn is supported!")
-                    print("  mode: legacy console injection")
-                    print("\n[usage] click cube in SourceBox to spawn")
-                    print("="*70 + "\n")
+                    if PLATFORM == 'Windows' and WINDOWS_API_AVAILABLE:
+                        print(f"  source game with no vscript! ONLY srcbox spawn is supported!")
+                        print(f"  mode: legacy console injection (no VScript)")
+                        print("="*70 + "\n")
+                        print("\n[usage] click cube in SourceBox to spawn")
+                        print("="*70 + "\n")
+                    else:
+                        print(f"  mode: nothing (no VScript and console injection not available in Linux)")
         except Exception as e:
             print(f"Bridge initialization error: {e}")
             bridge = None
@@ -1181,8 +1192,10 @@ def main():
                                 if bridge and bridge.active_game:
                                     try:
                                         bridge.spawn("props/srcbox/srcbox.mdl", 200)
-                                        time.sleep(0.1) 
-                                        bridge.reinstall_awp_outputs()
+                                        time.sleep(0.1)
+                                        # only reinstall AWP outputs for non-Mapbase games
+                                        if bridge.mapbase_bridge is None:
+                                            bridge.reinstall_awp_outputs()
                                     except Exception as e:
                                         print(f"Bridge spawn error: {e}")
                                 
