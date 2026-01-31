@@ -100,6 +100,7 @@ source myenv/bin/activate
 ```bash
 pip install -r requirements.txt
 ```
+> Note: This installs `pygame-ce` (imported as `pygame`). If you previously installed `pygame`, uninstall it first to avoid conflicts.
 
 4. **Important**: Launch your game **before** running SourceBox
 

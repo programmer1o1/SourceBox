@@ -7,6 +7,8 @@ import sys
 from OpenGL.GL import *
 from OpenGL.GLU import *
 
+from rendering_helpers import PIL_AVAILABLE, pil_render_text_rgba
+
 def find_resource(filenames):
     """find first existing resource from list of filenames"""
     if isinstance(filenames, str):
@@ -24,6 +26,17 @@ def find_resource(filenames):
         if os.path.exists(path):
             return path
     return None
+
+
+def _pygame_font_available() -> bool:
+    try:
+        import pygame.font
+
+        pygame.font.init()
+        pygame.font.Font(None, 12)
+        return True
+    except Exception:
+        return False
 
 class GreyCone:
     """grey cone with axis display and various behaviors"""
@@ -95,6 +108,15 @@ class ConeScene:
 
         self.sound_manager = sound_manager
         self.display_scale = display_scale
+        self._cabin_font_path = find_resource(
+            [
+                "assets/fonts/Cabin-Regular.ttf",
+                "fonts/Cabin-Regular.ttf",
+                "Cabin-Regular.ttf",
+            ]
+        )
+        self._text_backend = None
+        self._font_cache = {}
 
         # grid settings - fixed for consistent world space
         self.grid_count = 15
@@ -223,33 +245,150 @@ class ConeScene:
         self.metal_reg_intervals = [0.01, 0.03, 0.09]
         self.metal_reg_interval_index = 0
 
-        try:
-            # use find_resource to locate fonts
-            cabin_font_path = find_resource([
-                'assets/fonts/Cabin-Regular.ttf',
-                'fonts/Cabin-Regular.ttf',
-                'Cabin-Regular.ttf'
-            ])
+        self.coord_font = None
+        self.coord_font_small = None
+        self.coord_font_reg_small = None
+        self.loading_font = None
 
-            if cabin_font_path:
-                # this is closest font i could find unless anomi provides font name for it.
-                self.coord_font = pygame.font.Font(cabin_font_path, 18)
-                self.coord_font_small = pygame.font.Font(cabin_font_path, 16)
-                self.coord_font_reg_small = pygame.font.Font(cabin_font_path, 12)
-                self.loading_font = pygame.font.SysFont('trebuchetms', 20, bold=True)
-            else:
-                # fallback if font not found
-                raise FileNotFoundError("Cabin font not found")
-
-        except Exception as e:
-            # fallback to default fonts
-            print(f"Font loading failed: {e}, using defaults")
-            self.coord_font = pygame.font.Font(None, 18)
-            self.coord_font_small = pygame.font.Font(None, 16)
-            self.coord_font_reg_small = pygame.font.Font(None, 12)
-            self.loading_font = pygame.font.Font(None, 20)
+        if _pygame_font_available():
+            self._text_backend = "pygame"
+        elif PIL_AVAILABLE:
+            self._text_backend = "pillow"
+            print("pygame.font not available; using Pillow for text rendering")
+        else:
+            self._text_backend = None
+            print("Text rendering disabled: pygame.font and Pillow are unavailable")
 
         self.load_grid_texture()
+
+    def _render_text_rgba(
+        self,
+        text: str,
+        *,
+        font_size: int,
+        color: tuple[int, int, int] | tuple[int, int, int, int],
+        bold: bool = False,
+        letter_spacing: int = 0,
+        flip_y: bool = False,
+    ) -> tuple[bytes, int, int] | None:
+        if self._text_backend == "pygame":
+            try:
+                key = (self._cabin_font_path, font_size, bold)
+                font = self._font_cache.get(key)
+                if font is None:
+                    if self._cabin_font_path:
+                        font = pygame.font.Font(self._cabin_font_path, font_size)
+                    else:
+                        font = pygame.font.Font(None, font_size)
+                    self._font_cache[key] = font
+
+                surface = font.render(text, True, color[:3])
+                data = pygame.image.tostring(surface, "RGBA", flip_y)
+                return data, surface.get_width(), surface.get_height()
+            except Exception:
+                # fall back to Pillow if pygame.font exists but fails at runtime
+                pass
+
+        if self._text_backend == "pillow":
+            return pil_render_text_rgba(
+                text,
+                font_path=self._cabin_font_path,
+                font_size=font_size,
+                color=color,
+                letter_spacing=letter_spacing,
+                bold=bold,
+                flip_y=flip_y,
+            )
+
+        return None
+
+    def render_text_texture(
+        self,
+        text_data: bytes,
+        text_width: int,
+        text_height: int,
+        x: float,
+        y: float,
+        *,
+        use_mipmaps: bool = True,
+    ) -> None:
+        if not text_data or text_width <= 0 or text_height <= 0:
+            return
+
+        text_texture = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, text_texture)
+
+        glTexParameteri(
+            GL_TEXTURE_2D,
+            GL_TEXTURE_MIN_FILTER,
+            GL_LINEAR_MIPMAP_LINEAR if use_mipmaps else GL_LINEAR,
+        )
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+
+        glTexImage2D(
+            GL_TEXTURE_2D,
+            0,
+            GL_RGBA,
+            text_width,
+            text_height,
+            0,
+            GL_RGBA,
+            GL_UNSIGNED_BYTE,
+            text_data,
+        )
+        if use_mipmaps:
+            glGenerateMipmap(GL_TEXTURE_2D)
+
+        glColor4f(1.0, 1.0, 1.0, 1.0)
+        glBegin(GL_QUADS)
+        glTexCoord2f(0, 0)
+        glVertex2f(x, y)
+        glTexCoord2f(1, 0)
+        glVertex2f(x + text_width, y)
+        glTexCoord2f(1, 1)
+        glVertex2f(x + text_width, y + text_height)
+        glTexCoord2f(0, 1)
+        glVertex2f(x, y + text_height)
+        glEnd()
+
+        glDeleteTextures([text_texture])
+
+    def draw_text(
+        self,
+        text: str,
+        x: float,
+        y: float,
+        *,
+        font_size: int,
+        color: tuple[int, int, int] | tuple[int, int, int, int],
+        bold: bool = False,
+        letter_spacing: int = 0,
+        use_mipmaps: bool = True,
+        flip_y: bool = False,
+    ) -> tuple[int, int]:
+        rendered = self._render_text_rgba(
+            text,
+            font_size=font_size,
+            color=color,
+            bold=bold,
+            letter_spacing=letter_spacing,
+            flip_y=flip_y,
+        )
+        if not rendered:
+            return 0, 0
+
+        text_data, text_width, text_height = rendered
+        self.render_text_texture(
+            text_data,
+            text_width,
+            text_height,
+            x,
+            y,
+            use_mipmaps=use_mipmaps,
+        )
+        return text_width, text_height
 
     def generate_grey_cones(self):
         self.grey_cones = []
@@ -356,10 +495,17 @@ class ConeScene:
         glMatrixMode(GL_MODELVIEW)
 
     def draw_loading_text(self, display_width, display_height):
-        text_surface = self.loading_font.render("NG CONNECTION...", True, (150, 0, 0))
-        text_data = pygame.image.tostring(text_surface, "RGBA", False)
-        text_width = text_surface.get_width()
-        text_height = text_surface.get_height()
+        rendered = self._render_text_rgba(
+            "NG CONNECTION...",
+            font_size=20,
+            color=(150, 0, 0, 255),
+            bold=True,
+            flip_y=False,
+        )
+        if not rendered:
+            return
+
+        text_data, text_width, text_height = rendered
 
         glMatrixMode(GL_PROJECTION)
         glPushMatrix()
@@ -376,24 +522,17 @@ class ConeScene:
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         glEnable(GL_TEXTURE_2D)
 
-        text_texture = glGenTextures(1)
-        glBindTexture(GL_TEXTURE_2D, text_texture)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, text_width, text_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, text_data)
-
         x_pos = -12
         y_pos = display_height // 2 - text_height // 2
 
-        glColor4f(1.0, 1.0, 1.0, 1.0)
-        glBegin(GL_QUADS)
-        glTexCoord2f(0, 0); glVertex2f(x_pos, y_pos)
-        glTexCoord2f(1, 0); glVertex2f(x_pos + text_width, y_pos)
-        glTexCoord2f(1, 1); glVertex2f(x_pos + text_width, y_pos + text_height)
-        glTexCoord2f(0, 1); glVertex2f(x_pos, y_pos + text_height)
-        glEnd()
-
-        glDeleteTextures([text_texture])
+        self.render_text_texture(
+            text_data,
+            text_width,
+            text_height,
+            x_pos,
+            y_pos,
+            use_mipmaps=False,
+        )
         glDisable(GL_TEXTURE_2D)
         glDisable(GL_BLEND)
         glEnable(GL_DEPTH_TEST)
@@ -427,25 +566,27 @@ class ConeScene:
 
         # located text - yellow, spaced
         located_text = "L  O  C  A  T  E  D   W  F  A  3  Y  -  A   [  I  N  T  E  R  L  O  P  E  .  D  M  E  ]"
-        text_surface = self.coord_font.render(located_text, True, (255, 255, 0))
-        self.render_text_texture(text_surface, 10, y_pos)
+        self.draw_text(
+            located_text,
+            10,
+            y_pos,
+            font_size=18,
+            color=(255, 255, 0, 255),
+            use_mipmaps=True,
+        )
         y_pos += 25
 
         # validators text - yellow, cut off at edge
         validators_text = "V A L I D A T O R S   H A V E   N O T   B E E N   V E R I F I E D,   P L E A S E"
-        text_surface = self.coord_font.render(validators_text, True, (255, 255, 0))
-        self.render_text_texture(text_surface, 10, y_pos)
+        self.draw_text(
+            validators_text,
+            10,
+            y_pos,
+            font_size=18,
+            color=(255, 255, 0, 255),
+            use_mipmaps=True,
+        )
         y_pos += 23
-
-        # coordinates - scale from dot position
-        dot_pos = [
-            self.target_position[0] + self.dot_offset[0],
-            self.target_position[1] + self.dot_offset[1],
-            self.target_position[2] + self.dot_offset[2]
-        ]
-
-        scale_factor = 15000.0
-        base_offset = 50000.0
 
         # coordinates
         if not self.coords_initialized:
@@ -472,48 +613,83 @@ class ConeScene:
 
             return spaced_str
 
-        try:
-            cabin_font_path = find_resource([
-                'assets/fonts/Cabin-Regular.ttf',
-                'fonts/Cabin-Regular.ttf'
-            ])
-
-            if cabin_font_path:
-                coord_number_font = pygame.font.Font(cabin_font_path, 23)
-            else:
-                coord_number_font = pygame.font.Font(None, 23)
-        except Exception as e:
-            coord_number_font = pygame.font.Font(None, 23)
-
         x_pos_start = 20
 
         # x coordinate
-        x_label_surface = self.coord_font.render("X", True, (255, 255, 0))
-        self.render_text_texture(x_label_surface, x_pos_start, y_pos)
-        x_num_surface = coord_number_font.render(format_coord(scaled_x, 3), True, (255, 0, 0))
-        self.render_text_texture(x_num_surface, x_pos_start + x_label_surface.get_width() + 5, y_pos - 2)
+        x_label_width, _ = self.draw_text(
+            "X",
+            x_pos_start,
+            y_pos,
+            font_size=18,
+            color=(255, 255, 0, 255),
+            use_mipmaps=True,
+        )
+        self.draw_text(
+            format_coord(scaled_x, 3),
+            x_pos_start + x_label_width + 5,
+            y_pos - 2,
+            font_size=23,
+            color=(255, 0, 0, 255),
+            use_mipmaps=True,
+        )
         y_pos += 25
 
         # y coordinate
-        y_label_surface = self.coord_font.render("Y", True, (255, 255, 0))
-        self.render_text_texture(y_label_surface, x_pos_start, y_pos)
-        y_num_surface = coord_number_font.render(format_coord(scaled_y, 2), True, (255, 0, 0))
-        self.render_text_texture(y_num_surface, x_pos_start + y_label_surface.get_width() + 5, y_pos - 2)
+        y_label_width, _ = self.draw_text(
+            "Y",
+            x_pos_start,
+            y_pos,
+            font_size=18,
+            color=(255, 255, 0, 255),
+            use_mipmaps=True,
+        )
+        self.draw_text(
+            format_coord(scaled_y, 2),
+            x_pos_start + y_label_width + 5,
+            y_pos - 2,
+            font_size=23,
+            color=(255, 0, 0, 255),
+            use_mipmaps=True,
+        )
         y_pos += 25
 
         # z coordinate
-        z_label_surface = self.coord_font.render("Z", True, (255, 255, 0))
-        self.render_text_texture(z_label_surface, x_pos_start, y_pos)
-        z_num_surface = coord_number_font.render(format_coord(scaled_z, 2), True, (255, 0, 0))
-        self.render_text_texture(z_num_surface, x_pos_start + z_label_surface.get_width() + 5, y_pos - 2)
+        z_label_width, _ = self.draw_text(
+            "Z",
+            x_pos_start,
+            y_pos,
+            font_size=18,
+            color=(255, 255, 0, 255),
+            use_mipmaps=True,
+        )
+        self.draw_text(
+            format_coord(scaled_z, 2),
+            x_pos_start + z_label_width + 5,
+            y_pos - 2,
+            font_size=23,
+            color=(255, 0, 0, 255),
+            use_mipmaps=True,
+        )
         y_pos += 28
 
         # metal_reg phrase cycling
         current_phrase = self.metal_reg_phrases[self.metal_reg_index]
-        metal_label_surface = self.coord_font_small.render("METAL_REG-", True, (255, 255, 0))
-        self.render_text_texture(metal_label_surface, 10, y_pos)
-        metal_phrase_surface = self.coord_font_reg_small.render(current_phrase, True, (255, 140, 0))
-        self.render_text_texture(metal_phrase_surface, 10 + metal_label_surface.get_width(), y_pos + 2.5)
+        metal_label_width, _ = self.draw_text(
+            "METAL_REG-",
+            10,
+            y_pos,
+            font_size=16,
+            color=(255, 255, 0, 255),
+            use_mipmaps=True,
+        )
+        self.draw_text(
+            current_phrase,
+            10 + metal_label_width,
+            y_pos + 2.5,
+            font_size=12,
+            color=(255, 140, 0, 255),
+            use_mipmaps=True,
+        )
 
         glDisable(GL_TEXTURE_2D)
         glDisable(GL_BLEND)
@@ -524,32 +700,6 @@ class ConeScene:
         glMatrixMode(GL_PROJECTION)
         glPopMatrix()
         glMatrixMode(GL_MODELVIEW)
-
-    def render_text_texture(self, text_surface, x, y):
-        text_data = pygame.image.tostring(text_surface, "RGBA", False)
-        text_width = text_surface.get_width()
-        text_height = text_surface.get_height()
-
-        text_texture = glGenTextures(1)
-        glBindTexture(GL_TEXTURE_2D, text_texture)
-
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, text_width, text_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, text_data)
-        glGenerateMipmap(GL_TEXTURE_2D)
-
-        glColor4f(1.0, 1.0, 1.0, 1.0)
-        glBegin(GL_QUADS)
-        glTexCoord2f(0, 0); glVertex2f(x, y)
-        glTexCoord2f(1, 0); glVertex2f(x + text_width, y)
-        glTexCoord2f(1, 1); glVertex2f(x + text_width, y + text_height)
-        glTexCoord2f(0, 1); glVertex2f(x, y + text_height)
-        glEnd()
-
-        glDeleteTextures([text_texture])
 
     def draw_black_screen(self, display_width, display_height):
         glMatrixMode(GL_PROJECTION)
@@ -641,6 +791,9 @@ class ConeScene:
             texture_path = find_resource(texture_candidates)
 
             if texture_path:
+                width = height = 0
+                grid_data = None
+
                 try:
                     grid_img = pygame.image.load(texture_path).convert_alpha()
 
@@ -655,16 +808,46 @@ class ConeScene:
                                 grid_img.set_at((x, y), (0, 0, 0, 0))
 
                     grid_data = pygame.image.tostring(grid_img, "RGBA", True)
+                except Exception:
+                    if PIL_AVAILABLE:
+                        try:
+                            from PIL import Image
 
-                    self.grid_texture = glGenTextures(1)
-                    glBindTexture(GL_TEXTURE_2D, self.grid_texture)
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, grid_data)
-                except Exception as e:
+                            img = Image.open(texture_path).convert("RGBA")
+                            pixels = list(img.getdata())
+                            pixels = [
+                                (0, 0, 0, 0) if (r == 0 and g == 0 and b == 0) else (r, g, b, a)
+                                for r, g, b, a in pixels
+                            ]
+                            img.putdata(pixels)
+
+                            width, height = img.size
+                            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+                            grid_data = img.tobytes()
+                        except Exception:
+                            grid_data = None
+
+                if not grid_data or width <= 0 or height <= 0:
                     self.grid_texture = None
+                    return
+
+                self.grid_texture = glGenTextures(1)
+                glBindTexture(GL_TEXTURE_2D, self.grid_texture)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
+                glTexImage2D(
+                    GL_TEXTURE_2D,
+                    0,
+                    GL_RGBA,
+                    width,
+                    height,
+                    0,
+                    GL_RGBA,
+                    GL_UNSIGNED_BYTE,
+                    grid_data,
+                )
             else:
                 self.grid_texture = None
         except Exception as e:

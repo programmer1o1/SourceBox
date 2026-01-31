@@ -12,6 +12,7 @@ from OpenGL.GLU import *
 import platform  
 
 from cone_scene import ConeScene
+from rendering_helpers import PIL_AVAILABLE, pil_load_image_rgba, pil_render_text_rgba
 
 # platform detection
 PLATFORM = platform.system()
@@ -66,6 +67,17 @@ def find_resource(filenames):
         if os.path.exists(path):
             return path
     return None
+
+
+def _pygame_font_available() -> bool:
+    try:
+        import pygame.font
+
+        pygame.font.init()
+        pygame.font.Font(None, 12)
+        return True
+    except Exception:
+        return False
 
 class Object3D:
     def __init__(self, obj_type, position=(0, 0, 0), rotation=(0, 0, 0), scale=1.0, scale_xyz=[1.0, 1.0, 1.0], brightness=0.6):
@@ -314,58 +326,110 @@ class MissingTextureScene:
         self.create_text_texture()
         
     def create_text_texture(self):
-        try:
-            font_name = None
-            font_size = 36
-            
-            if PLATFORM == 'Windows':
-                font_candidates = ['Trebuchet MS', 'Arial', 'Verdana']
-            else:
-                font_candidates = ['DejaVu Sans', 'Liberation Sans', 'FreeSans', 'Arial']
-            
-            for font_candidate in font_candidates:
-                try:
-                    font = pygame.font.SysFont(font_candidate, font_size)
-                    break
-                except:
-                    continue
-            else:
-                font = pygame.font.Font(None, font_size)
-            
-            char_spacing = 2
-            
-            total_width = 0
-            char_surfaces = []
-            for char in self.text:
-                char_surf = font.render(char, True, (255, 0, 0))
-                char_surfaces.append(char_surf)
-                total_width += char_surf.get_width() + char_spacing
-            
-            total_width -= char_spacing
-            
-            max_height = max(surf.get_height() for surf in char_surfaces)
-            
-            text_surface = pygame.Surface((total_width, max_height), pygame.SRCALPHA)
-            text_surface.fill((0, 0, 0, 0))
-            
-            x_offset = 0
-            for char_surf in char_surfaces:
-                text_surface.blit(char_surf, (x_offset, 0))
-                x_offset += char_surf.get_width() + char_spacing
-            
-            text_data = pygame.image.tostring(text_surface, "RGBA", True)
-            
-            self.text_width = text_surface.get_width()
-            self.text_height = text_surface.get_height()
-            
-            self.text_texture = glGenTextures(1)
-            glBindTexture(GL_TEXTURE_2D, self.text_texture)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, self.text_width, self.text_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, text_data)
-        except Exception as e:
-            print(f"Error creating text texture: {e}")
-            self.text_texture = None
+        font_size = 36
+        char_spacing = 2
+
+        # Pygame path (fastest when available)
+        if _pygame_font_available():
+            try:
+                if PLATFORM == "Windows":
+                    font_candidates = ["Trebuchet MS", "Arial", "Verdana"]
+                else:
+                    font_candidates = ["DejaVu Sans", "Liberation Sans", "FreeSans", "Arial"]
+
+                font = None
+                for font_candidate in font_candidates:
+                    try:
+                        font = pygame.font.SysFont(font_candidate, font_size)
+                        break
+                    except Exception:
+                        continue
+
+                if font is None:
+                    font = pygame.font.Font(None, font_size)
+
+                total_width = 0
+                char_surfaces = []
+                for char in self.text:
+                    char_surf = font.render(char, True, (255, 0, 0))
+                    char_surfaces.append(char_surf)
+                    total_width += char_surf.get_width() + char_spacing
+
+                total_width = max(1, total_width - char_spacing)
+                max_height = max(1, max(surf.get_height() for surf in char_surfaces))
+
+                text_surface = pygame.Surface((total_width, max_height), pygame.SRCALPHA)
+                text_surface.fill((0, 0, 0, 0))
+
+                x_offset = 0
+                for char_surf in char_surfaces:
+                    text_surface.blit(char_surf, (x_offset, 0))
+                    x_offset += char_surf.get_width() + char_spacing
+
+                text_data = pygame.image.tostring(text_surface, "RGBA", True)
+
+                self.text_width = text_surface.get_width()
+                self.text_height = text_surface.get_height()
+
+                self.text_texture = glGenTextures(1)
+                glBindTexture(GL_TEXTURE_2D, self.text_texture)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+                glTexImage2D(
+                    GL_TEXTURE_2D,
+                    0,
+                    GL_RGBA,
+                    self.text_width,
+                    self.text_height,
+                    0,
+                    GL_RGBA,
+                    GL_UNSIGNED_BYTE,
+                    text_data,
+                )
+                return
+            except Exception:
+                pass
+
+        # Pillow path (works when pygame.font is not built)
+        if PIL_AVAILABLE:
+            cabin_font_path = find_resource(
+                [
+                    "assets/fonts/Cabin-Regular.ttf",
+                    "fonts/Cabin-Regular.ttf",
+                    "Cabin-Regular.ttf",
+                ]
+            )
+
+            rendered = pil_render_text_rgba(
+                self.text,
+                font_path=cabin_font_path,
+                font_size=font_size,
+                color=(255, 0, 0, 255),
+                letter_spacing=char_spacing,
+                bold=False,
+                flip_y=True,
+            )
+            if rendered:
+                text_data, self.text_width, self.text_height = rendered
+
+                self.text_texture = glGenTextures(1)
+                glBindTexture(GL_TEXTURE_2D, self.text_texture)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+                glTexImage2D(
+                    GL_TEXTURE_2D,
+                    0,
+                    GL_RGBA,
+                    self.text_width,
+                    self.text_height,
+                    0,
+                    GL_RGBA,
+                    GL_UNSIGNED_BYTE,
+                    text_data,
+                )
+                return
+
+        self.text_texture = None
         
     def create_display_list(self):
         if self.display_list is not None:
@@ -537,6 +601,16 @@ class CursorRenderer:
                     print(f"Cursor loaded: {cursor_path}")
                     return True
                 except Exception as e:
+                    if PIL_AVAILABLE:
+                        pil_result = pil_load_image_rgba(cursor_path, flip_y=False)
+                        if pil_result:
+                            cursor_data, width, height = pil_result
+                            self._create_texture_rgba(cursor_data, width, height)
+                            if self.texture_id:
+                                self.enabled = True
+                                print(f"Cursor loaded: {cursor_path}")
+                                return True
+
                     print(f"Error loading cursor from {cursor_path}: {e}")
             
             print("No cursor loaded, using system cursor")
@@ -556,6 +630,30 @@ class CursorRenderer:
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, self.width, self.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, cursor_data)
+        except Exception as e:
+            print(f"Error creating cursor texture: {e}")
+            self.texture_id = None
+
+    def _create_texture_rgba(self, rgba_data: bytes, width: int, height: int):
+        try:
+            self.width = int(width)
+            self.height = int(height)
+
+            self.texture_id = glGenTextures(1)
+            glBindTexture(GL_TEXTURE_2D, self.texture_id)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+            glTexImage2D(
+                GL_TEXTURE_2D,
+                0,
+                GL_RGBA,
+                self.width,
+                self.height,
+                0,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                rgba_data,
+            )
         except Exception as e:
             print(f"Error creating cursor texture: {e}")
             self.texture_id = None
@@ -621,21 +719,25 @@ class SoundManager:
         self.sounds = {}
         self.music_loaded = False
         self.initialized = False
+        self._mixer = None
         
         try:
-            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+            import pygame.mixer as mixer
+
+            mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+            self._mixer = mixer
             self.initialized = True
         except Exception as e:
             print(f"Failed to initialize audio: {e}")
         
     def load_sound(self, name, filepath):
-        if not self.initialized:
+        if not self.initialized or not self._mixer:
             return False
             
         try:
             sound_path = find_resource(filepath)
             if sound_path:
-                self.sounds[name] = pygame.mixer.Sound(sound_path)
+                self.sounds[name] = self._mixer.Sound(sound_path)
                 return True
             return False
         except Exception as e:
@@ -651,13 +753,13 @@ class SoundManager:
         return 0.0
     
     def load_music(self, filepath):
-        if not self.initialized:
+        if not self.initialized or not self._mixer:
             return False
             
         try:
             music_path = find_resource(filepath)
             if music_path:
-                pygame.mixer.music.load(music_path)
+                self._mixer.music.load(music_path)
                 self.music_loaded = True
                 return True
             return False
@@ -673,17 +775,17 @@ class SoundManager:
                 pass
     
     def play_music(self, loops=-1, volume=0.5, start=0.0):
-        if self.initialized and self.music_loaded:
+        if self.initialized and self.music_loaded and self._mixer:
             try:
-                pygame.mixer.music.set_volume(max(0.0, min(1.0, volume)))
-                pygame.mixer.music.play(loops, start=start)
+                self._mixer.music.set_volume(max(0.0, min(1.0, volume)))
+                self._mixer.music.play(loops, start=start)
             except:
                 pass
     
     def stop_music(self):
-        if self.initialized and self.music_loaded:
+        if self.initialized and self.music_loaded and self._mixer:
             try:
-                pygame.mixer.music.stop()
+                self._mixer.music.stop()
             except:
                 pass
 
@@ -805,7 +907,20 @@ def init_pygame():
                 pygame.display.set_icon(icon)
                 print(f"Icon loaded: {icon_path}")
             except Exception as e:
-                print(f"Failed to load icon: {e}")
+                if PIL_AVAILABLE:
+                    pil_result = pil_load_image_rgba(icon_path, flip_y=False)
+                    if pil_result:
+                        icon_data, width, height = pil_result
+                        try:
+                            icon = pygame.image.frombuffer(icon_data, (width, height), "RGBA")
+                            pygame.display.set_icon(icon)
+                            print(f"Icon loaded: {icon_path}")
+                            e = None
+                        except Exception:
+                            pass
+
+                if e is not None:
+                    print(f"Failed to load icon: {e}")
         
         flags = DOUBLEBUF | OPENGL
         
@@ -987,7 +1102,7 @@ def main():
     sound_manager.load_sound('hover', 'assets/sounds/click.wav')
     sound_manager.load_sound('cube_click', 'assets/sounds/friend_join.wav')
     sound_manager.load_sound('cone_click', 'assets/sounds/cone.wav')  
-    sound_manager.load_music('assets/sounds/sourcebox.dll.ogg')
+    sound_manager.load_music('assets/sounds/sourcebox.dll.mp3')
     # sourcebox album version don't start until like 2 sec for some reason but i am keeping it
     # until like when person go to voidside tracker or person go back to main menu
     # when song restarts, it will start 2 sec later so lol
@@ -1183,7 +1298,7 @@ def main():
                                 glViewport(0, 0, new_width, new_height)
                                 
                                 current_scene = "cone"
-                                sound_manager.play_music(loops=-1, volume=0.3, start=2.0)
+                                sound_manager.play_music(loops=-1, volume=0.3, start=1.0)
                                 
                             elif clicked_obj and clicked_obj.type == "cube":
                                 sound_manager.play_sound('cube_click')
@@ -1256,7 +1371,7 @@ def main():
                                 
                                 # restart music
                                 sound_manager.stop_music()
-                                sound_manager.play_music(loops=-1, volume=0.3, start=2.0)
+                                sound_manager.play_music(loops=-1, volume=0.3, start=1.0)
             
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
             
