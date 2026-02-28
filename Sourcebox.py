@@ -744,6 +744,13 @@ class SoundManager:
             print(f"Error loading sound {name}: {e}")
             return False
 
+    def stop_sound(self, name):
+        if self.initialized and name in self.sounds:
+            try:
+                self.sounds[name].stop()
+            except:
+                pass
+
     def get_sound_duration(self, name):
         if self.initialized and name in self.sounds:
             try:
@@ -877,10 +884,21 @@ def init_pygame():
             except:
                 print("GLUT initialization failed, continuing without it")
         
-        display_info = pygame.display.Info()
-        screen_width = display_info.current_w
-        screen_height = display_info.current_h
-        
+        # get_desktop_sizes() is more reliable than display.Info() on Linux/Wayland,
+        # especially after screen lock/unlock where display.Info() can return wrong values
+        if hasattr(pygame.display, 'get_desktop_sizes'):
+            desktop_sizes = pygame.display.get_desktop_sizes()
+            if desktop_sizes:
+                screen_width, screen_height = desktop_sizes[0]
+            else:
+                display_info = pygame.display.Info()
+                screen_width = display_info.current_w
+                screen_height = display_info.current_h
+        else:
+            display_info = pygame.display.Info()
+            screen_width = display_info.current_w
+            screen_height = display_info.current_h
+
         print(f"Detected screen resolution: {screen_width}x{screen_height}")
         
         if screen_width <= 1366 or screen_height <= 768:
@@ -1101,7 +1119,7 @@ def main():
     sound_manager = SoundManager()
     sound_manager.load_sound('hover', 'assets/sounds/click.wav')
     sound_manager.load_sound('cube_click', 'assets/sounds/friend_join.wav')
-    sound_manager.load_sound('cone_click', 'assets/sounds/cone.wav')  
+    sound_manager.load_sound('cone_click', 'assets/sounds/cone.wav')
     sound_manager.load_music('assets/sounds/sourcebox.dll.mp3')
     # sourcebox album version don't start until like 2 sec for some reason but i am keeping it
     # until like when person go to voidside tracker or person go back to main menu
@@ -1283,10 +1301,13 @@ def main():
                                 else:
                                     pygame.time.wait(500)  
                                 
-                                display_info = pygame.display.Info()
-                                screen_width = display_info.current_w
-                                screen_height = display_info.current_h
-                                
+                                if hasattr(pygame.display, 'get_desktop_sizes'):
+                                    desktop_sizes = pygame.display.get_desktop_sizes()
+                                    screen_width, screen_height = desktop_sizes[0] if desktop_sizes else (1920, 1080)
+                                else:
+                                    _di = pygame.display.Info()
+                                    screen_width, screen_height = _di.current_w, _di.current_h
+
                                 new_width = 548
                                 new_height = 525
                                 
@@ -1336,8 +1357,9 @@ def main():
                         elif current_scene == "cone":
                             # check triangle click in cone scene (LEFT-CLICK ONLY)
                             if cone_scene.check_triangle_click(mouse_pos, display[0], display[1]):
-                                # play friend_join sound
-                                sound_manager.play_sound('cube_click')
+                                sound_manager.play_sound('cone_click')
+                                pygame.time.wait(500)
+                                sound_manager.stop_sound('cone_click')
                                 
                                 # 3 second delay
                                 pygame.time.wait(3000)
@@ -1346,9 +1368,12 @@ def main():
                                 current_scene = "main"
                                 
                                 # restore to ORIGINAL display size
-                                display_info = pygame.display.Info()
-                                screen_width = display_info.current_w
-                                screen_height = display_info.current_h
+                                if hasattr(pygame.display, 'get_desktop_sizes'):
+                                    desktop_sizes = pygame.display.get_desktop_sizes()
+                                    screen_width, screen_height = desktop_sizes[0] if desktop_sizes else (1920, 1080)
+                                else:
+                                    _di = pygame.display.Info()
+                                    screen_width, screen_height = _di.current_w, _di.current_h
                                 
                                 # center the window with original size
                                 os.environ['SDL_VIDEO_WINDOW_POS'] = f"{(screen_width - original_display[0]) // 2},{(screen_height - original_display[1]) // 2}"
