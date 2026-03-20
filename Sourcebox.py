@@ -1120,6 +1120,7 @@ def main():
     sound_manager.load_sound('hover', 'assets/sounds/click.wav')
     sound_manager.load_sound('cube_click', 'assets/sounds/friend_join.wav')
     sound_manager.load_sound('cone_click', 'assets/sounds/cone.wav')
+    sound_manager.load_sound('cone_back', 'assets/sounds/coneback.wav')
     sound_manager.load_music('assets/sounds/sourcebox.dll.mp3')
     # sourcebox album version don't start until like 2 sec for some reason but i am keeping it
     # until like when person go to voidside tracker or person go back to main menu
@@ -1357,9 +1358,7 @@ def main():
                         elif current_scene == "cone":
                             # check triangle click in cone scene (LEFT-CLICK ONLY)
                             if cone_scene.check_triangle_click(mouse_pos, display[0], display[1]):
-                                sound_manager.play_sound('cone_click')
-                                pygame.time.wait(500)
-                                sound_manager.stop_sound('cone_click')
+                                sound_manager.play_sound('cone_back')
                                 
                                 # 3 second delay
                                 pygame.time.wait(3000)
