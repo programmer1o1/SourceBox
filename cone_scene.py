@@ -81,20 +81,20 @@ class GreyCone:
 
         glPopMatrix()
 
-        # axis lines (x/y/z)
-        axis_length = self.size * 1.5
-        glLineWidth(2.0)
+        # axis lines (x/y/z) - bright and visible
+        axis_length = self.size * 2.5
+        glLineWidth(3.0)
 
         glBegin(GL_LINES)
-        glColor3f(0.8, 0.2, 0.2)
+        glColor3f(1.0, 0.2, 0.2)
         glVertex3f(self.position[0], self.position[1], self.position[2])
         glVertex3f(self.position[0] + axis_length, self.position[1], self.position[2])
 
-        glColor3f(0.2, 0.8, 0.2)
+        glColor3f(0.2, 1.0, 0.2)
         glVertex3f(self.position[0], self.position[1], self.position[2])
         glVertex3f(self.position[0], self.position[1] + axis_length, self.position[2])
 
-        glColor3f(0.2, 0.2, 0.8)
+        glColor3f(0.2, 0.2, 1.0)
         glVertex3f(self.position[0], self.position[1], self.position[2])
         glVertex3f(self.position[0], self.position[1], self.position[2] + axis_length)
         glEnd()
@@ -189,7 +189,22 @@ class ConeScene:
         self.grey_cones = []
         self.generate_grey_cones()
 
+        # pink triangles floating in the void
+        self.pink_triangles = []
+        self.generate_pink_triangles()
+
+        # rare red object (small chance of appearing)
+        self.red_object_visible = random.random() < 0.15
+        self.red_object_position = [
+            random.uniform(-300, 300),
+            random.uniform(-50, 150),
+            random.uniform(-300, 300)
+        ]
+        self.red_object_rotation = random.uniform(0, 360)
+        self.red_object_pulse_timer = 0.0
+
         # triangle interaction
+        self.triangle_flash_red = False
         self.triangle_hovered = False
         self.triangle_scale = 1.0
         self.triangle_target_scale = 1.0
@@ -402,6 +417,33 @@ class ConeScene:
             ]
             self.grey_cones.append(GreyCone(position))
 
+    def generate_pink_triangles(self):
+        self.pink_triangles = []
+        # rare — 20% chance of appearing
+        if random.random() > 0.20:
+            return
+        # spawn near camera
+        yaw_rad = math.radians(self.camera_rotation[1])
+        forward_x = math.sin(yaw_rad)
+        forward_z = -math.cos(yaw_rad)
+        dist = random.uniform(30, 60)
+        pos = [
+            self.camera_pos[0] + forward_x * dist + random.uniform(-20, 20),
+            self.camera_pos[1] + random.uniform(-10, 10),
+            self.camera_pos[2] + forward_z * dist + random.uniform(-20, 20)
+        ]
+        size = random.uniform(2.0, 4.0)
+        dx = random.uniform(-1, 1)
+        dy = random.uniform(-0.3, 0.3)
+        dz = random.uniform(-1, 1)
+        length = math.sqrt(dx*dx + dy*dy + dz*dz)
+        if length > 0:
+            speed = random.uniform(3.0, 6.0)
+            vel = [dx/length * speed, dy/length * speed, dz/length * speed]
+        else:
+            vel = [3.0, 0, 0]
+        self.pink_triangles.append({'pos': pos, 'size': size, 'vel': vel})
+
     def generate_dot_direction(self):
         direction = [
             random.uniform(-1, 1),
@@ -464,11 +506,15 @@ class ConeScene:
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
-        # change color when hovered
-        if self.triangle_hovered:
-            glColor4f(1.0, 0.0, 0.0, 1.0)  # red when hovered
+        # change color when flashing or hovered
+        if self.triangle_flash_red == "red":
+            glColor4f(1.0, 0.0, 0.0, 1.0)
+        elif self.triangle_flash_red == "grey":
+            glColor4f(0.5, 0.5, 0.5, 1.0)
+        elif self.triangle_hovered:
+            glColor4f(1.0, 0.0, 0.0, 1.0)
         else:
-            glColor4f(0.0, 1.0, 1.0, 1.0)  # cyan normally
+            glColor4f(0.0, 1.0, 1.0, 1.0)
 
         center_x = display_width * 0.85
         center_y = display_height * 0.60
@@ -1042,6 +1088,16 @@ class ConeScene:
         for cone in self.grey_cones:
             cone.update(dt)
 
+        # pink triangles drift
+        for tri in self.pink_triangles:
+            tri['pos'][0] += tri['vel'][0] * dt
+            tri['pos'][1] += tri['vel'][1] * dt
+            tri['pos'][2] += tri['vel'][2] * dt
+
+        # red object pulse
+        if self.red_object_visible:
+            self.red_object_pulse_timer += dt
+
         # target switching
         self.target_timer += dt
         if self.target_timer >= self.target_switch_interval:
@@ -1071,6 +1127,92 @@ class ConeScene:
             cone.draw()
 
         glDisable(GL_LIGHTING)
+
+    def draw_pink_triangles(self):
+        glDisable(GL_LIGHTING)
+        glDisable(GL_FOG)
+        glEnable(GL_DEPTH_TEST)
+
+        for tri in self.pink_triangles:
+            pos = tri['pos']
+            size = tri['size']
+
+            # billboard — always face camera
+            glPushMatrix()
+            glTranslatef(*pos)
+
+            dx = self.camera_pos[0] - pos[0]
+            dy = self.camera_pos[1] - pos[1]
+            dz = self.camera_pos[2] - pos[2]
+            angle_y = math.degrees(math.atan2(dx, dz))
+            horizontal_dist = math.sqrt(dx*dx + dz*dz)
+            angle_x = -math.degrees(math.atan2(dy, horizontal_dist))
+            glRotatef(angle_y, 0, 1, 0)
+            glRotatef(angle_x, 1, 0, 0)
+
+            glColor3f(1.0, 0.6, 1.0)
+
+            glBegin(GL_TRIANGLES)
+            glVertex3f(0, size * 0.7, 0)
+            glVertex3f(-size * 1.0, -size * 0.4, 0)
+            glVertex3f(size * 1.0, -size * 0.4, 0)
+            glEnd()
+
+            glPopMatrix()
+
+        glEnable(GL_FOG)
+        glEnable(GL_LIGHTING)
+
+    def draw_red_object(self):
+        if not self.red_object_visible:
+            return
+
+        glDisable(GL_LIGHTING)
+        glEnable(GL_DEPTH_TEST)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+        pulse = 0.5 + 0.5 * math.sin(self.red_object_pulse_timer * 2.0)
+        alpha = 0.4 + 0.3 * pulse
+
+        glPushMatrix()
+        glTranslatef(*self.red_object_position)
+        glRotatef(self.red_object_rotation, 0, 1, 0)
+        glRotatef(self.red_object_pulse_timer * 15.0, 1, 0, 0)
+
+        glColor4f(0.8, 0.05, 0.05, alpha)
+
+        # irregular polyhedron shape
+        s = 4.0
+        verts = [
+            [0, s*1.2, 0], [-s, 0, s*0.7], [s*0.8, 0, s],
+            [s, 0, -s*0.6], [-s*0.7, 0, -s], [0, -s*0.8, 0]
+        ]
+
+        faces = [
+            (0, 1, 2), (0, 2, 3), (0, 3, 4), (0, 4, 1),
+            (5, 2, 1), (5, 3, 2), (5, 4, 3), (5, 1, 4)
+        ]
+
+        glBegin(GL_TRIANGLES)
+        for f in faces:
+            v0, v1, v2 = verts[f[0]], verts[f[1]], verts[f[2]]
+            # simple face normal
+            ax, ay, az = v1[0]-v0[0], v1[1]-v0[1], v1[2]-v0[2]
+            bx, by, bz = v2[0]-v0[0], v2[1]-v0[1], v2[2]-v0[2]
+            nx, ny, nz = ay*bz - az*by, az*bx - ax*bz, ax*by - ay*bx
+            ln = math.sqrt(nx*nx + ny*ny + nz*nz)
+            if ln > 0:
+                glNormal3f(nx/ln, ny/ln, nz/ln)
+            glVertex3f(*v0)
+            glVertex3f(*v1)
+            glVertex3f(*v2)
+        glEnd()
+
+        glPopMatrix()
+
+        glDisable(GL_BLEND)
+        glEnable(GL_LIGHTING)
 
     def draw_blue_box_and_line(self):
         glDisable(GL_LIGHTING)
@@ -1450,6 +1592,8 @@ class ConeScene:
             glDepthMask(GL_TRUE)
 
             self.draw_grey_cones()
+            self.draw_pink_triangles()
+            self.draw_red_object()
             self.draw_blue_box_and_line()
             self.draw_target()
             self.draw_cyan_triangle_sprite(display_width, display_height)

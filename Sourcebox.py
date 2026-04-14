@@ -225,7 +225,7 @@ class Light:
         self.diffuse = [1.0, 1.0, 1.0, 1.0]
         self.specular = [1.0, 1.0, 1.0, 1.0]
         self.setup_done = False
-    
+
     def apply(self):
         if not self.setup_done:
             glLightfv(GL_LIGHT0, GL_AMBIENT, self.ambient)
@@ -244,41 +244,58 @@ class Checkerboard:
         self.light_color = [0.0, 0.0, 0.0]
         self.brightness = 2
         self.display_list = None
-    
+        self.texture = None
+
     def create_display_list(self):
         if self.display_list is not None:
             return
-            
+
+        self._create_blurred_texture()
+
         try:
             self.display_list = glGenLists(1)
             if self.display_list == 0:
                 return
-                
+
             glNewList(self.display_list, GL_COMPILE)
-            
+
             size = self.size
-            dark_r = self.dark_color[0] * self.brightness
-            dark_g = self.dark_color[1] * self.brightness
-            dark_b = self.dark_color[2] * self.brightness
-            light_r = self.light_color[0] * self.brightness
-            light_g = self.light_color[1] * self.brightness
-            light_b = self.light_color[2] * self.brightness
-            
-            glNormal3f(0, 1, 0)
-            glBegin(GL_QUADS)
-            for x in range(-size, size):
-                for z in range(-size, size):
-                    if (x + z) & 1:
-                        glColor3f(light_r, light_g, light_b)
-                    else:
-                        glColor3f(dark_r, dark_g, dark_b)
-                    
-                    glVertex3f(x, 0, z)
-                    glVertex3f(x, 0, z+1)
-                    glVertex3f(x+1, 0, z+1)
-                    glVertex3f(x+1, 0, z)
-            glEnd()
-            
+
+            if self.texture:
+                glEnable(GL_TEXTURE_2D)
+                glBindTexture(GL_TEXTURE_2D, self.texture)
+                glNormal3f(0, 1, 0)
+                glColor3f(1, 1, 1)
+                glBegin(GL_QUADS)
+                glTexCoord2f(0, 0); glVertex3f(-size, 0, -size)
+                glTexCoord2f(1, 0); glVertex3f(size, 0, -size)
+                glTexCoord2f(1, 1); glVertex3f(size, 0, size)
+                glTexCoord2f(0, 1); glVertex3f(-size, 0, size)
+                glEnd()
+                glDisable(GL_TEXTURE_2D)
+            else:
+                dark_r = self.dark_color[0] * self.brightness
+                dark_g = self.dark_color[1] * self.brightness
+                dark_b = self.dark_color[2] * self.brightness
+                light_r = self.light_color[0] * self.brightness
+                light_g = self.light_color[1] * self.brightness
+                light_b = self.light_color[2] * self.brightness
+
+                glNormal3f(0, 1, 0)
+                glBegin(GL_QUADS)
+                for x in range(-size, size):
+                    for z in range(-size, size):
+                        if (x + z) & 1:
+                            glColor3f(light_r, light_g, light_b)
+                        else:
+                            glColor3f(dark_r, dark_g, dark_b)
+
+                        glVertex3f(x, 0, z)
+                        glVertex3f(x, 0, z+1)
+                        glVertex3f(x+1, 0, z+1)
+                        glVertex3f(x+1, 0, z)
+                glEnd()
+
             glEndList()
         except Exception as e:
             print(f"Error creating checkerboard display list: {e}")
@@ -288,11 +305,69 @@ class Checkerboard:
                 except:
                     pass
                 self.display_list = None
-    
-    def draw(self):
+
+    def _create_blurred_texture(self):
+        """generate a pre-blurred checkerboard texture"""
+        try:
+            tex_size = 1024
+            tile_count = self.size * 2
+            pixels_per_tile = tex_size / tile_count
+
+            dark_val = int(self.dark_color[0] * self.brightness * 255)
+            light_val = int(self.light_color[0] * self.brightness * 255)
+
+            # generate sharp checkerboard
+            data = bytearray(tex_size * tex_size * 3)
+            for y in range(tex_size):
+                for x in range(tex_size):
+                    tx = int(x / pixels_per_tile)
+                    ty = int(y / pixels_per_tile)
+                    val = light_val if (tx + ty) & 1 else dark_val
+                    idx = (y * tex_size + x) * 3
+                    data[idx] = val
+                    data[idx + 1] = val
+                    data[idx + 2] = val
+
+            # gentle blur: blend 20% blurred with 80% sharp
+            sharp = bytes(data)
+            blurred = bytearray(tex_size * tex_size * 3)
+            radius = 1
+            for y in range(tex_size):
+                for x in range(tex_size):
+                    r_sum = 0
+                    count = 0
+                    for dy in range(-radius, radius + 1):
+                        for dx in range(-radius, radius + 1):
+                            nx = min(max(x + dx, 0), tex_size - 1)
+                            ny = min(max(y + dy, 0), tex_size - 1)
+                            r_sum += sharp[(ny * tex_size + nx) * 3]
+                            count += 1
+                    idx = (y * tex_size + x) * 3
+                    blur_val = r_sum // count
+                    sharp_val = sharp[idx]
+                    val = int(sharp_val * 0.9 + blur_val * 0.1)
+                    blurred[idx] = val
+                    blurred[idx + 1] = val
+                    blurred[idx + 2] = val
+            data = blurred
+
+            self.texture = glGenTextures(1)
+            glBindTexture(GL_TEXTURE_2D, self.texture)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, tex_size, tex_size, 0,
+                         GL_RGB, GL_UNSIGNED_BYTE, bytes(data))
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+            glBindTexture(GL_TEXTURE_2D, 0)
+        except Exception as e:
+            print(f"Blur texture creation failed ({e}), using sharp checkerboard")
+            self.texture = None
+
+    def draw(self, display_width=None, display_height=None):
         if self.display_list is None:
             return
-            
+
         glPushMatrix()
         glTranslatef(*self.position)
         if self.rotation[0] or self.rotation[1] or self.rotation[2]:
@@ -302,7 +377,7 @@ class Checkerboard:
         glScalef(self.scale[0], self.scale[1], self.scale[2])
         glCallList(self.display_list)
         glPopMatrix()
-    
+
     def cleanup(self):
         if self.display_list:
             try:
@@ -310,6 +385,12 @@ class Checkerboard:
             except:
                 pass
             self.display_list = None
+        if self.texture:
+            try:
+                glDeleteTextures([self.texture])
+            except:
+                pass
+            self.texture = None
 
 class MissingTextureScene:
     def __init__(self, sound_manager=None, display_scale=1.0):
@@ -1033,9 +1114,9 @@ def draw_object(obj):
         brightness_map = {"cube": 0.6, "sphere": 0.7, "cone": 0.65}
         b = brightness_map.get(obj.type, 0.6) * obj.brightness
         glColor3f(b, b, b)
-    
+
     glCallList(obj.display_list)
-    
+
     if lighting_disabled:
         glEnable(GL_LIGHTING)
     
@@ -1295,12 +1376,54 @@ def main():
                             
                             elif clicked_obj and clicked_obj.type == "cone":
                                 sound_manager.play_sound('cone_click')
-                                
+
+                                # clear hover so cone shows normal color between flashes
+                                clicked_obj.is_hovered = False
+
+                                # red -> normal -> red -> normal -> red (fast)
+                                flash_pattern = [True, False, True, False, True]
+                                for is_red in flash_pattern:
+                                    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+                                    camera.apply()
+                                    light.apply()
+                                    board.draw(display[0], display[1])
+                                    glDisable(GL_TEXTURE_2D)
+                                    glBindTexture(GL_TEXTURE_2D, 0)
+                                    glEnable(GL_LIGHTING)
+                                    glEnable(GL_DEPTH_TEST)
+                                    glEnable(GL_COLOR_MATERIAL)
+                                    glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
+                                    for o in objects:
+                                        if o == clicked_obj:
+                                            glPushMatrix()
+                                            glTranslatef(*o.position)
+                                            if o.base_rotation[0]: glRotatef(o.base_rotation[0], 1, 0, 0)
+                                            if o.base_rotation[1]: glRotatef(o.base_rotation[1], 0, 1, 0)
+                                            if o.base_rotation[2]: glRotatef(o.base_rotation[2], 0, 0, 1)
+                                            sx = o.scale * o.scale_xyz[0]
+                                            sy = o.scale * o.scale_xyz[1]
+                                            sz = o.scale * o.scale_xyz[2]
+                                            glScalef(sx, sy, sz)
+                                            if is_red:
+                                                glDisable(GL_LIGHTING)
+                                                glColor3f(1.0, 0.0, 0.0)
+                                                glCallList(o.display_list)
+                                                glEnable(GL_LIGHTING)
+                                            else:
+                                                b = 0.65 * o.brightness
+                                                glColor3f(b, b, b)
+                                                glCallList(o.display_list)
+                                            glPopMatrix()
+                                        else:
+                                            draw_object(o)
+                                    cursor_renderer.draw(mouse_pos, display[0], display[1])
+                                    pygame.display.flip()
+                                    pygame.time.wait(80)
+
                                 cone_duration = sound_manager.get_sound_duration('cone_click')
-                                if cone_duration > 0:
-                                    pygame.time.wait(int(cone_duration * 1000))  
-                                else:
-                                    pygame.time.wait(500)  
+                                remaining = int(cone_duration * 1000) - 400 if cone_duration > 0 else 100
+                                if remaining > 0:
+                                    pygame.time.wait(remaining)
                                 
                                 if hasattr(pygame.display, 'get_desktop_sizes'):
                                     desktop_sizes = pygame.display.get_desktop_sizes()
@@ -1359,9 +1482,23 @@ def main():
                             # check triangle click in cone scene (LEFT-CLICK ONLY)
                             if cone_scene.check_triangle_click(mouse_pos, display[0], display[1]):
                                 sound_manager.play_sound('cone_back')
-                                
-                                # 3 second delay
-                                pygame.time.wait(3000)
+
+                                # clear hover so triangle shows normal color between flashes
+                                cone_scene.triangle_hovered = False
+
+                                # red -> grey -> red -> grey -> red
+                                flash_pattern = ["red", "grey", "red", "grey", "red"]
+                                for state in flash_pattern:
+                                    cone_scene.triangle_flash_red = state
+                                    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+                                    cone_scene.draw(display[0], display[1])
+                                    cursor_renderer.draw(mouse_pos, display[0], display[1])
+                                    pygame.display.flip()
+                                    pygame.time.wait(80)
+                                cone_scene.triangle_flash_red = False
+
+                                # 3 second delay (minus flash time)
+                                pygame.time.wait(2600)
                                 
                                 # return to main menu
                                 current_scene = "main"
@@ -1410,12 +1547,14 @@ def main():
                 ray_caster.update_matrices()
                 
                 check_object_hover(mouse_pos, ray_caster, objects, sound_manager)
-                
-                board.draw()
-                
+
+                board.draw(display[0], display[1])
+                glDisable(GL_TEXTURE_2D)
+                glBindTexture(GL_TEXTURE_2D, 0)
+
                 for obj in objects:
                     draw_object(obj)
-                
+
                 cursor_renderer.draw(mouse_pos, display[0], display[1])
                 
             elif current_scene == "error":
