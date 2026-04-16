@@ -96,7 +96,7 @@ class GModBridge:
                     return path
             
         elif system == 'Linux':
-            for path in ["~/.local/share/Steam", "~/.steam/steam", "~/.steam/root", "~/.steam/manjaro-installation"]:
+            for path in ["~/.steam/manjaro-installation", "~/.local/share/Steam", "~/.steam/steam", "~/.steam/root"]:
                 expanded = os.path.expanduser(path)
                 if os.path.islink(expanded):
                     expanded = os.path.realpath(expanded)
