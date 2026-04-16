@@ -96,7 +96,7 @@ class GModBridge:
                     return path
             
         elif system == 'Linux':
-            for path in ["~/.local/share/Steam", "~/.steam/steam", "~/.steam/root"]:
+            for path in ["~/.steam/manjaro-installation", "~/.local/share/Steam", "~/.steam/steam", "~/.steam/root"]:
                 expanded = os.path.expanduser(path)
                 if os.path.islink(expanded):
                     expanded = os.path.realpath(expanded)
@@ -830,7 +830,7 @@ SOURCEBOX = SOURCEBOX or {}
 SOURCEBOX.Spawner = SOURCEBOX.Spawner or {}
 local Spawner = SOURCEBOX.Spawner
 
-local CUBE_MODEL = "models/props/srcbox/srcbox.mdl"
+local CUBE_MODEL = "models/srcbox.mdl"
 local spawned_cubes = {}
 local spawn_initialized = false
 local spawn_attempts = 0
@@ -1669,7 +1669,7 @@ print("[Picker] Targets: NPCs (priority), Players, Props")
 SOURCEBOX.Spawner = SOURCEBOX.Spawner or {}
 local Spawner = SOURCEBOX.Spawner
 
-local CUBE_MODEL = "models/props/srcbox/srcbox.mdl"
+local CUBE_MODEL = "models/srcbox.mdl"
 local spawned_cubes = {}
 local spawn_initialized = false
 local spawn_attempts = 0
