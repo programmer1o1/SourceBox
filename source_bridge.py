@@ -232,7 +232,7 @@ class SourceBridge:
                     return path
             
         elif system == 'Linux':
-            for path in ["~/.local/share/Steam", "~/.steam/steam", "~/.steam/root"]:
+            for path in ["~/.local/share/Steam", "~/.steam/steam", "~/.steam/root", "~/.steam/manjaro-installation"]:
                 expanded = os.path.expanduser(path)
                 if os.path.islink(expanded):
                     expanded = os.path.realpath(expanded)
