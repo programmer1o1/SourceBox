@@ -55,7 +55,12 @@ class GreyCone:
             self.velocity = [0, -random.uniform(5, 15), 0]
 
         self.size = random.uniform(0.3, 3.0)
-        self.rotation = random.uniform(0, 360)
+        # distinct 3-axis orientation per cone so each spawned one looks different
+        self.rotation = [
+            random.uniform(0, 360),
+            random.uniform(0, 360),
+            random.uniform(0, 360),
+        ]
 
     def update(self, dt):
         if self.state != 'still':
@@ -69,37 +74,39 @@ class GreyCone:
     def draw(self):
         glPushMatrix()
         glTranslatef(*self.position)
-        glRotatef(self.rotation, 0, 1, 0)
+        glRotatef(self.rotation[0], 1, 0, 0)
+        glRotatef(self.rotation[1], 0, 1, 0)
+        glRotatef(self.rotation[2], 0, 0, 1)
 
+        # axis lines (x/y/z) - single-pixel lines, rotated with the cone
+        axis_length = self.size * 2.5
+        glLineWidth(2.0)
+
+        glBegin(GL_LINES)
+        glColor3f(1.0, 0.35, 0.35)
+        glVertex3f(0.0, 0.0, 0.0)
+        glVertex3f(axis_length, 0.0, 0.0)
+
+        glColor3f(0.35, 1.0, 0.35)
+        glVertex3f(0.0, 0.0, 0.0)
+        glVertex3f(0.0, axis_length, 0.0)
+
+        glColor3f(0.35, 0.35, 1.0)
+        glVertex3f(0.0, 0.0, 0.0)
+        glVertex3f(0.0, 0.0, axis_length)
+        glEnd()
+
+        # cone body
         glColor3f(0.5, 0.5, 0.5)
+        glPushMatrix()
         glRotatef(-90, 1, 0, 0)
-
         quadric = gluNewQuadric()
         if quadric:
             gluCylinder(quadric, self.size * 0.1, 0.0, self.size * 0.3, 16, 4)
             gluDeleteQuadric(quadric)
-
         glPopMatrix()
 
-        # axis lines (x/y/z) - bright and visible
-        axis_length = self.size * 2.5
-        glLineWidth(3.0)
-
-        glBegin(GL_LINES)
-        glColor3f(1.0, 0.2, 0.2)
-        glVertex3f(self.position[0], self.position[1], self.position[2])
-        glVertex3f(self.position[0] + axis_length, self.position[1], self.position[2])
-
-        glColor3f(0.2, 1.0, 0.2)
-        glVertex3f(self.position[0], self.position[1], self.position[2])
-        glVertex3f(self.position[0], self.position[1] + axis_length, self.position[2])
-
-        glColor3f(0.2, 0.2, 1.0)
-        glVertex3f(self.position[0], self.position[1], self.position[2])
-        glVertex3f(self.position[0], self.position[1], self.position[2] + axis_length)
-        glEnd()
-
-        glLineWidth(1.0)
+        glPopMatrix()
 
 class ConeScene:
     def __init__(self, sound_manager=None, display_scale=1.0):
@@ -407,7 +414,7 @@ class ConeScene:
 
     def generate_grey_cones(self):
         self.grey_cones = []
-        num_cones = random.randint(5, 15)
+        num_cones = random.randint(8, 20)
 
         for _ in range(num_cones):
             position = [
