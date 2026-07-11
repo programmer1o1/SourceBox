@@ -173,7 +173,14 @@ class GModBridge:
         print("\n[scan] detecting gmod installations...")
         
         running_gmod = self._detect_running_gmod()
-        
+
+        # scan the library that actually holds the running game first, so a
+        # leftover/empty install in another library doesn't get picked instead
+        active_library = self._get_running_gmod_library()
+        if active_library:
+            print(f"  [running] library: {active_library}")
+        all_libraries = self._prioritize_libraries(all_libraries, active_library)
+
         # first scan sourcemod variants (gmod 9-12)
         for library_path in all_libraries:
             sourcemods_path = os.path.join(library_path, 'steamapps', 'sourcemods')
@@ -267,9 +274,49 @@ class GModBridge:
                     continue
         except:
             pass
-        
+
         return None
-        
+
+    def _get_running_gmod_library(self):
+        """find the steam library root that holds the running gmod executable"""
+        try:
+            for proc in psutil.process_iter(['name', 'exe', 'cmdline']):
+                try:
+                    proc_name = proc.info.get('name')
+                    exe_path = proc.info.get('exe')
+                    if not proc_name or not exe_path:
+                        continue
+
+                    proc_lower = proc_name.lower()
+                    if proc_lower not in ['hl2.exe', 'hl2_linux', 'gmod.exe', 'gmod', 'gmod64', 'gmod32', 'gmod_linux']:
+                        continue
+
+                    # walk up from the exe until we find the library root (contains steamapps)
+                    current = os.path.dirname(exe_path)
+                    for _ in range(10):
+                        if os.path.exists(os.path.join(current, 'steamapps')) or \
+                           os.path.exists(os.path.join(current, 'SteamApps')):
+                            return current
+                        parent = os.path.dirname(current)
+                        if parent == current:
+                            break
+                        current = parent
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+        except:
+            pass
+
+        return None
+
+    def _prioritize_libraries(self, libraries, active_library):
+        """put the library holding the running game first so a leftover install
+        in another library (e.g. an old garrysmod on C:) doesn't win over the
+        library the game is actually launched from (e.g. D:)"""
+        if not active_library:
+            return list(libraries)
+        active_norm = os.path.normcase(os.path.normpath(active_library))
+        return sorted(libraries, key=lambda lib: os.path.normcase(os.path.normpath(lib)) != active_norm)
+
     def _setup_paths(self, data_path, addon_path, gmod_name, is_gmod9=False, gmod_version=None):
         """setup paths"""
         self.data_path = data_path

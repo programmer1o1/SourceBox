@@ -1039,8 +1039,18 @@ class SourceBridge:
     def _setup_gmod_path(self, game_name, game_info, steam_libraries):
         """setup paths for gmod (sourcemod or retail)"""
         install_type = game_info.get('install_type', 'sourcemod')
-        
-        for library_path in steam_libraries:
+
+        # prioritize the library that actually holds the running executable, so a
+        # leftover/empty game folder in another library (e.g. an old garrysmod on C:)
+        # doesn't win over the library the game is really launched from (e.g. D:)
+        ordered_libraries = list(steam_libraries)
+        active_library = self._get_running_game_library(game_name)
+        if active_library:
+            active_norm = os.path.normcase(os.path.normpath(active_library))
+            ordered_libraries.sort(key=lambda lib: os.path.normcase(os.path.normpath(lib)) != active_norm)
+            self._log(f"prioritizing running game library: {active_library}")
+
+        for library_path in ordered_libraries:
             mod_path = None
             
             if install_type == 'standalone':
