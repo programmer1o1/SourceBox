@@ -6,12 +6,12 @@ on:
       - main
     tags:
       - 'v*'
-  
+
   pull_request:
     types: [closed]
     branches:
       - main
-  
+
   workflow_dispatch:
 
 permissions:
@@ -21,13 +21,13 @@ jobs:
   build:
     runs-on: ${{ matrix.os }}
     if: |
-      github.event_name == 'push' || 
+      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
-    
+
     strategy:
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
         include:
           - os: windows-latest
             output_name: SourceBox.exe
@@ -35,38 +35,52 @@ jobs:
           - os: ubuntu-latest
             output_name: SourceBox
             artifact_name: SourceBox-Linux
-    
+          - os: macos-latest
+            output_name: SourceBox-macOS.zip
+            artifact_name: SourceBox-macOS
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install --upgrade "pyinstaller>=6.0.0"
         pip install -r requirements.txt
         pip install pillow
-    
+
+    - name: Run tests
+      run: python -m unittest discover -v
+
     - name: Build executable (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        pyinstaller --onefile --windowed --name SourceBox --icon=assets/images/sourcebox.png --add-data "assets;assets" --exclude-module pkg_resources --exclude-module setuptools --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --noupx --clean Sourcebox.py
-    
+        pyinstaller --onefile --windowed --name SourceBox --icon=assets/images/sourcebox.png --add-data "assets;assets" --add-data "bridge_scripts;bridge_scripts" --exclude-module pkg_resources --exclude-module setuptools --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --noupx --clean Sourcebox.py
+
     - name: Build executable (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
-        pyinstaller --onefile --windowed --name SourceBox --icon=assets/images/sourcebox.png --add-data "assets:assets" --exclude-module pkg_resources --exclude-module setuptools --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --hidden-import=OpenGL.platform.glx --hidden-import=OpenGL.arrays.vbo --collect-all OpenGL --noupx --clean Sourcebox.py
-    
+        pyinstaller --onefile --windowed --name SourceBox --icon=assets/images/sourcebox.png --add-data "assets:assets" --add-data "bridge_scripts:bridge_scripts" --exclude-module pkg_resources --exclude-module setuptools --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --hidden-import=OpenGL.platform.glx --hidden-import=OpenGL.arrays.vbo --collect-all OpenGL --noupx --clean Sourcebox.py
+
+    - name: Build executable (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        pyinstaller --onedir --windowed --name SourceBox-macOS --icon=assets/images/sourcebox.png --add-data "assets:assets" --add-data "bridge_scripts:bridge_scripts" --exclude-module pkg_resources --exclude-module setuptools --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --hidden-import=OpenGL.platform.darwin --hidden-import=OpenGL.arrays.vbo --collect-all OpenGL --noupx --clean Sourcebox.py
+        xattr -crs dist/SourceBox-macOS.app
+        codesign --verify --deep --strict dist/SourceBox-macOS.app
+        ditto -c -k --sequesterRsrc --keepParent dist/SourceBox-macOS.app dist/SourceBox-macOS.zip
+
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.artifact_name }}
         path: dist/${{ matrix.output_name }}
-    
+
     - name: Upload to Release
       uses: softprops/action-gh-release@v1
       if: startsWith(github.ref, 'refs/tags/v')

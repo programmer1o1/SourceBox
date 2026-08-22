@@ -2,7 +2,7 @@
 
 An application with Source Engine integration through VScript and Garry's Mod Lua scripting.
 
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blue)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue)
 ![Python](https://img.shields.io/badge/python-3.7+-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
@@ -217,6 +217,28 @@ sourcebox_spawn props/srcbox/srcbox.mdl
 - Window may freeze for ~200ms
 - Only SRCBOX cube supported
 
+### CrossOver on macOS
+
+The native macOS build scans CrossOver's configured private and published bottle
+directories for Steam. It supports the file-based VScript and Garry's Mod Lua
+bridges, including games launched through Wine/CrossOver command wrappers.
+
+Legacy Windows console injection is not available from the native macOS build.
+Install Steam and the Source game in a CrossOver bottle, launch the game first,
+then start SourceBox.
+
+#### Installing the macOS build
+
+1. Unzip `SourceBox-macOS.zip` and move `SourceBox-macOS.app` to Applications.
+2. Start Steam and the Source game inside CrossOver.
+3. Open SourceBox. If macOS blocks the first launch, Control-click the app,
+   choose **Open**, then confirm **Open**. Alternatively, use **Open Anyway** in
+   System Settings > Privacy & Security.
+
+The build is currently distributed without Apple notarization, so the first-launch
+confirmation is expected. SourceBox writes startup and game-detection details to
+`~/Library/Logs/SourceBox/sourcebox.log`.
+
 ## Troubleshooting
 
 ### Common Issues
@@ -225,6 +247,8 @@ sourcebox_spawn props/srcbox/srcbox.mdl
 - Make sure game is running **before** launching SourceBox
 - Check that game is installed via Steam
 - Try restarting Steam
+- On macOS, confirm Steam and the game are running in the same CrossOver bottle
+- Check `~/Library/Logs/SourceBox/sourcebox.log` for the detected bottle and game
 
 **Scripts not loading in Source games:**
 - Type `sv_cheats 1` in console
@@ -265,6 +289,7 @@ pip install pyinstaller
 pyinstaller --onefile --windowed --name SourceBox ^
   --icon=assets/images/sourcebox.png ^
   --add-data "assets;assets" ^
+  --add-data "bridge_scripts;bridge_scripts" ^
   --exclude-module pkg_resources ^
   --exclude-module setuptools ^
   --noupx --clean Sourcebox.py
@@ -276,6 +301,7 @@ pip install pyinstaller
 pyinstaller --onefile --windowed --name SourceBox \
   --icon=assets/images/sourcebox.png \
   --add-data "assets:assets" \
+  --add-data "bridge_scripts:bridge_scripts" \
   --exclude-module pkg_resources \
   --exclude-module setuptools \
   --hidden-import=OpenGL.platform.glx \
@@ -284,7 +310,25 @@ pyinstaller --onefile --windowed --name SourceBox \
   --noupx --clean Sourcebox.py
 ```
 
-Output: `dist/SourceBox.exe` (Windows) or `dist/SourceBox` (Linux)
+**macOS:**
+```bash
+pip install pyinstaller
+pyinstaller --onedir --windowed --name SourceBox-macOS \
+  --icon=assets/images/sourcebox.png \
+  --add-data "assets:assets" \
+  --add-data "bridge_scripts:bridge_scripts" \
+  --hidden-import=OpenGL.platform.darwin \
+  --hidden-import=OpenGL.arrays.vbo \
+  --collect-all OpenGL \
+  --noupx --clean Sourcebox.py
+xattr -crs dist/SourceBox-macOS.app
+codesign --verify --deep --strict dist/SourceBox-macOS.app
+ditto -c -k --sequesterRsrc --keepParent \
+  dist/SourceBox-macOS.app dist/SourceBox-macOS.zip
+```
+
+Output: `dist/SourceBox.exe` (Windows), `dist/SourceBox` (Linux), or
+`dist/SourceBox-macOS.zip` (macOS).
 
 ### Adding Custom Models
 

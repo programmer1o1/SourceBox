@@ -1,24 +1,29 @@
 import pygame
-import math
 import os
 import sys
 import time
-import random
-from pathlib import Path
 from pygame.locals import *
 from OpenGL.GL import *
 from OpenGL.GLU import *
 
-import platform  
+import platform
 
 from cone_scene import ConeScene
-from rendering_helpers import PIL_AVAILABLE, pil_load_image_rgba, pil_render_text_rgba
+from rendering_helpers import PIL_AVAILABLE, pil_load_image_rgba
+from sourcebox.audio import SoundManager
+from sourcebox.bridges import BridgeManager
+from sourcebox.cursor import CursorRenderer
+from sourcebox.diagnostics import configure_runtime_diagnostics
+from sourcebox.raycast import RayCaster
+from sourcebox.rendering.main_scene import Camera, Checkerboard, Light, Object3D
+from sourcebox.resources import find_resource
+from sourcebox.scenes.missing_texture import MissingTextureScene
 
 # platform detection
-PLATFORM = platform.system()
+OPERATING_SYSTEM = platform.system()
 
 # hide console window on windows
-if PLATFORM == 'Windows':
+if OPERATING_SYSTEM == 'Windows':
     try:
         import ctypes
         ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
@@ -35,10 +40,11 @@ except ImportError:
 
 # import source_bridge conditionally
 try:
-    from source_bridge import SourceBridge
+    from source_bridge import SourceBridge, WINDOWS_API_AVAILABLE
     BRIDGE_AVAILABLE = True
 except ImportError:
     BRIDGE_AVAILABLE = False
+    WINDOWS_API_AVAILABLE = False
     print("Warning: source_bridge not available")
 
 try:
@@ -47,924 +53,30 @@ try:
 except ImportError:
     GMOD_BRIDGE_AVAILABLE = False
     print("Warning: gmod_bridge not available")
-    
-def get_resource_path(filename):
-    """get absolute path to resource file, works for dev and pyinstaller"""
-    if hasattr(sys, '_MEIPASS'):
-        base_path = Path(sys._MEIPASS)
-    else:
-        base_path = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-    
-    return str(base_path / filename)
 
-def find_resource(filenames):
-    """find first existing resource from list of filenames"""
-    if isinstance(filenames, str):
-        filenames = [filenames]
-    
-    for filename in filenames:
-        path = get_resource_path(filename)
-        if os.path.exists(path):
-            return path
-    return None
-
-
-def _pygame_font_available() -> bool:
-    try:
-        import pygame.font
-
-        pygame.font.init()
-        pygame.font.Font(None, 12)
-        return True
-    except Exception:
-        return False
-
-class Object3D:
-    def __init__(self, obj_type, position=(0, 0, 0), rotation=(0, 0, 0), scale=1.0, scale_xyz=[1.0, 1.0, 1.0], brightness=0.6):
-        self.type = obj_type
-        self.position = list(position)
-        self.rotation = list(rotation)
-        self.base_rotation = list(rotation)
-        self.base_scale = max(0.01, abs(scale))
-        self.scale = self.base_scale
-        self.target_scale = self.base_scale
-        self.scale_xyz = [max(0.01, abs(s)) for s in scale_xyz]
-        self.brightness = max(0.0, min(1.0, brightness))
-        self.base_brightness = self.brightness
-        self.is_hovered = False
-        self.is_rotating = False
-        self.rotation_angle = 0.0
-        self.hover_timer = 0.0
-        self.hover_animation_duration = 0.1
-        self.hover_scale_amount = 0.05
-        self.was_hovered = False
-        self.display_list = None
-        
-        # precalculate bounding sphere radius
-        if self.type == "sphere":
-            self.bounding_radius = 0.5 * self.scale * max(self.scale_xyz)
-        elif self.type == "cube":
-            self.bounding_radius = 0.866 * self.scale * max(self.scale_xyz)
-        elif self.type == "cone":
-            self.bounding_radius = 0.6 * self.scale * max(self.scale_xyz)
-        else:
-            self.bounding_radius = 0.5 * self.scale * max(self.scale_xyz)
-        
-    def create_display_list(self):
-        if self.display_list is not None:
-            return
-            
-        try:
-            self.display_list = glGenLists(1)
-            if self.display_list == 0:
-                return
-                
-            glNewList(self.display_list, GL_COMPILE)
-            
-            if self.type == "cube":
-                self._draw_cube_geometry()
-            elif self.type == "sphere":
-                quadric = gluNewQuadric()
-                if quadric:
-                    gluQuadricNormals(quadric, GLU_SMOOTH)
-                    gluSphere(quadric, 0.5, 32, 32)
-                    gluDeleteQuadric(quadric)
-            elif self.type == "cone":
-                quadric = gluNewQuadric()
-                if quadric:
-                    gluQuadricNormals(quadric, GLU_SMOOTH)
-                    gluCylinder(quadric, 0.5, 0.0, 1.0, 32, 4)
-                    gluDeleteQuadric(quadric)
-                    
-                    glBegin(GL_TRIANGLE_FAN)
-                    glNormal3f(0, 0, -1)
-                    glVertex3f(0, 0, 0)
-                    for i in range(33):
-                        angle = (i / 32.0) * 2.0 * math.pi
-                        x = 0.5 * math.cos(angle)
-                        y = 0.5 * math.sin(angle)
-                        glVertex3f(x, y, 0)
-                    glEnd()
-            
-            glEndList()
-        except Exception as e:
-            print(f"Error creating display list for {self.type}: {e}")
-            if self.display_list:
-                try:
-                    glDeleteLists(self.display_list, 1)
-                except:
-                    pass
-                self.display_list = None
-    
-    def _draw_cube_geometry(self):
-        glBegin(GL_QUADS)
-        # top
-        glNormal3f(0, 1, 0)
-        glVertex3f(0.5, 0.5, -0.5)
-        glVertex3f(-0.5, 0.5, -0.5)
-        glVertex3f(-0.5, 0.5, 0.5)
-        glVertex3f(0.5, 0.5, 0.5)
-        # bottom
-        glNormal3f(0, -1, 0)
-        glVertex3f(0.5, -0.5, -0.5)
-        glVertex3f(-0.5, -0.5, -0.5)
-        glVertex3f(-0.5, -0.5, 0.5)
-        glVertex3f(0.5, -0.5, 0.5)
-        # right
-        glNormal3f(1, 0, 0)
-        glVertex3f(0.5, 0.5, -0.5)
-        glVertex3f(0.5, 0.5, 0.5)
-        glVertex3f(0.5, -0.5, 0.5)
-        glVertex3f(0.5, -0.5, -0.5)
-        # left
-        glNormal3f(-1, 0, 0)
-        glVertex3f(-0.5, 0.5, -0.5)
-        glVertex3f(-0.5, 0.5, 0.5)
-        glVertex3f(-0.5, -0.5, 0.5)
-        glVertex3f(-0.5, -0.5, -0.5)
-        # front
-        glNormal3f(0, 0, -1)
-        glVertex3f(0.5, 0.5, -0.5)
-        glVertex3f(-0.5, 0.5, -0.5)
-        glVertex3f(-0.5, -0.5, -0.5)
-        glVertex3f(0.5, -0.5, -0.5)
-        # back
-        glNormal3f(0, 0, 1)
-        glVertex3f(-0.5, 0.5, 0.5)
-        glVertex3f(0.5, 0.5, 0.5)
-        glVertex3f(0.5, -0.5, 0.5)
-        glVertex3f(-0.5, -0.5, 0.5)
-        glEnd()
-    
-    def cleanup(self):
-        if self.display_list:
-            try:
-                glDeleteLists(self.display_list, 1)
-            except:
-                pass
-            self.display_list = None
-
-class Camera:
-    def __init__(self):
-        self.position = [0.0, -1.0, -10.0]
-        self.rotation = [92.97, -9.00, -10.38]
-        self.fov = max(1.0, min(179.0, 53.25))
-        self.matrices_dirty = True
-    
-    def apply(self):
-        glLoadIdentity()
-        glTranslatef(*self.position)
-        glRotatef(self.rotation[0], 1, 0, 0)
-        glRotatef(self.rotation[1], 0, 1, 0)
-        glRotatef(self.rotation[2], 0, 0, 1)
-
-class Light:
-    def __init__(self):
-        self.position = [107.10, 2.85, -185.15, 1.0]
-        self.ambient = [0.1, 0.1, 0.1, 1.0]
-        self.diffuse = [1.0, 1.0, 1.0, 1.0]
-        self.specular = [1.0, 1.0, 1.0, 1.0]
-        self.setup_done = False
-
-    def apply(self):
-        if not self.setup_done:
-            glLightfv(GL_LIGHT0, GL_AMBIENT, self.ambient)
-            glLightfv(GL_LIGHT0, GL_DIFFUSE, self.diffuse)
-            glLightfv(GL_LIGHT0, GL_SPECULAR, self.specular)
-            self.setup_done = True
-        glLightfv(GL_LIGHT0, GL_POSITION, self.position)
-
-class Checkerboard:
-    def __init__(self):
-        self.size = 30
-        self.position = [-25.87, 0.53, 6.68]
-        self.rotation = [0, 0, 0]
-        self.scale = [1.55, 0.63, 1.22]
-        self.dark_color = [0.2, 0.2, 0.2]
-        self.light_color = [0.0, 0.0, 0.0]
-        self.brightness = 2
-        self.display_list = None
-        self.texture = None
-
-    def create_display_list(self):
-        if self.display_list is not None:
-            return
-
-        self._create_blurred_texture()
-
-        try:
-            self.display_list = glGenLists(1)
-            if self.display_list == 0:
-                return
-
-            glNewList(self.display_list, GL_COMPILE)
-
-            size = self.size
-
-            if self.texture:
-                glEnable(GL_TEXTURE_2D)
-                glBindTexture(GL_TEXTURE_2D, self.texture)
-                glNormal3f(0, 1, 0)
-                glColor3f(1, 1, 1)
-                glBegin(GL_QUADS)
-                glTexCoord2f(0, 0); glVertex3f(-size, 0, -size)
-                glTexCoord2f(1, 0); glVertex3f(size, 0, -size)
-                glTexCoord2f(1, 1); glVertex3f(size, 0, size)
-                glTexCoord2f(0, 1); glVertex3f(-size, 0, size)
-                glEnd()
-                glDisable(GL_TEXTURE_2D)
-            else:
-                dark_r = self.dark_color[0] * self.brightness
-                dark_g = self.dark_color[1] * self.brightness
-                dark_b = self.dark_color[2] * self.brightness
-                light_r = self.light_color[0] * self.brightness
-                light_g = self.light_color[1] * self.brightness
-                light_b = self.light_color[2] * self.brightness
-
-                glNormal3f(0, 1, 0)
-                glBegin(GL_QUADS)
-                for x in range(-size, size):
-                    for z in range(-size, size):
-                        if (x + z) & 1:
-                            glColor3f(light_r, light_g, light_b)
-                        else:
-                            glColor3f(dark_r, dark_g, dark_b)
-
-                        glVertex3f(x, 0, z)
-                        glVertex3f(x, 0, z+1)
-                        glVertex3f(x+1, 0, z+1)
-                        glVertex3f(x+1, 0, z)
-                glEnd()
-
-            glEndList()
-        except Exception as e:
-            print(f"Error creating checkerboard display list: {e}")
-            if self.display_list:
-                try:
-                    glDeleteLists(self.display_list, 1)
-                except:
-                    pass
-                self.display_list = None
-
-    def _create_blurred_texture(self):
-        """generate a pre-blurred checkerboard texture"""
-        try:
-            tex_size = 1024
-            tile_count = self.size * 2
-            pixels_per_tile = tex_size / tile_count
-
-            dark_val = int(self.dark_color[0] * self.brightness * 255)
-            light_val = int(self.light_color[0] * self.brightness * 255)
-
-            # generate sharp checkerboard
-            data = bytearray(tex_size * tex_size * 3)
-            for y in range(tex_size):
-                for x in range(tex_size):
-                    tx = int(x / pixels_per_tile)
-                    ty = int(y / pixels_per_tile)
-                    val = light_val if (tx + ty) & 1 else dark_val
-                    idx = (y * tex_size + x) * 3
-                    data[idx] = val
-                    data[idx + 1] = val
-                    data[idx + 2] = val
-
-            # gentle blur: blend 20% blurred with 80% sharp
-            sharp = bytes(data)
-            blurred = bytearray(tex_size * tex_size * 3)
-            radius = 1
-            for y in range(tex_size):
-                for x in range(tex_size):
-                    r_sum = 0
-                    count = 0
-                    for dy in range(-radius, radius + 1):
-                        for dx in range(-radius, radius + 1):
-                            nx = min(max(x + dx, 0), tex_size - 1)
-                            ny = min(max(y + dy, 0), tex_size - 1)
-                            r_sum += sharp[(ny * tex_size + nx) * 3]
-                            count += 1
-                    idx = (y * tex_size + x) * 3
-                    blur_val = r_sum // count
-                    sharp_val = sharp[idx]
-                    val = int(sharp_val * 0.9 + blur_val * 0.1)
-                    blurred[idx] = val
-                    blurred[idx + 1] = val
-                    blurred[idx + 2] = val
-            data = blurred
-
-            self.texture = glGenTextures(1)
-            glBindTexture(GL_TEXTURE_2D, self.texture)
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, tex_size, tex_size, 0,
-                         GL_RGB, GL_UNSIGNED_BYTE, bytes(data))
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-            glBindTexture(GL_TEXTURE_2D, 0)
-        except Exception as e:
-            print(f"Blur texture creation failed ({e}), using sharp checkerboard")
-            self.texture = None
-
-    def draw(self, display_width=None, display_height=None):
-        if self.display_list is None:
-            return
-
-        glPushMatrix()
-        glTranslatef(*self.position)
-        if self.rotation[0] or self.rotation[1] or self.rotation[2]:
-            glRotatef(self.rotation[0], 1, 0, 0)
-            glRotatef(self.rotation[1], 0, 1, 0)
-            glRotatef(self.rotation[2], 0, 0, 1)
-        glScalef(self.scale[0], self.scale[1], self.scale[2])
-        glCallList(self.display_list)
-        glPopMatrix()
-
-    def cleanup(self):
-        if self.display_list:
-            try:
-                glDeleteLists(self.display_list, 1)
-            except:
-                pass
-            self.display_list = None
-        if self.texture:
-            try:
-                glDeleteTextures([self.texture])
-            except:
-                pass
-            self.texture = None
-
-class MissingTextureScene:
-    def __init__(self, sound_manager=None, display_scale=1.0):
-        self.display_list = None
-        self.text = "WARNING: NO GRAPHICS DRIVER DETECTED. PLEASE ENABLE A VALID GRAPHICS DRIVER."
-        self.text_visible = True
-        self.flash_timer = 0.0
-        self.next_flash_interval = random.choice([0.1, 0.3, 0.5])
-        self.text_texture = None
-        self.text_width = 0
-        self.text_height = 0
-        self.sound_manager = sound_manager
-        self.display_scale = display_scale
-        self.create_text_texture()
-        
-    def create_text_texture(self):
-        font_size = 36
-        char_spacing = 2
-
-        # Pygame path (fastest when available)
-        if _pygame_font_available():
-            try:
-                if PLATFORM == "Windows":
-                    font_candidates = ["Trebuchet MS", "Arial", "Verdana"]
-                else:
-                    font_candidates = ["DejaVu Sans", "Liberation Sans", "FreeSans", "Arial"]
-
-                font = None
-                for font_candidate in font_candidates:
-                    try:
-                        font = pygame.font.SysFont(font_candidate, font_size)
-                        break
-                    except Exception:
-                        continue
-
-                if font is None:
-                    font = pygame.font.Font(None, font_size)
-
-                total_width = 0
-                char_surfaces = []
-                for char in self.text:
-                    char_surf = font.render(char, True, (255, 0, 0))
-                    char_surfaces.append(char_surf)
-                    total_width += char_surf.get_width() + char_spacing
-
-                total_width = max(1, total_width - char_spacing)
-                max_height = max(1, max(surf.get_height() for surf in char_surfaces))
-
-                text_surface = pygame.Surface((total_width, max_height), pygame.SRCALPHA)
-                text_surface.fill((0, 0, 0, 0))
-
-                x_offset = 0
-                for char_surf in char_surfaces:
-                    text_surface.blit(char_surf, (x_offset, 0))
-                    x_offset += char_surf.get_width() + char_spacing
-
-                text_data = pygame.image.tostring(text_surface, "RGBA", True)
-
-                self.text_width = text_surface.get_width()
-                self.text_height = text_surface.get_height()
-
-                self.text_texture = glGenTextures(1)
-                glBindTexture(GL_TEXTURE_2D, self.text_texture)
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-                glTexImage2D(
-                    GL_TEXTURE_2D,
-                    0,
-                    GL_RGBA,
-                    self.text_width,
-                    self.text_height,
-                    0,
-                    GL_RGBA,
-                    GL_UNSIGNED_BYTE,
-                    text_data,
-                )
-                return
-            except Exception:
-                pass
-
-        # Pillow path (works when pygame.font is not built)
-        if PIL_AVAILABLE:
-            cabin_font_path = find_resource(
-                [
-                    "assets/fonts/Cabin-Regular.ttf",
-                    "fonts/Cabin-Regular.ttf",
-                    "Cabin-Regular.ttf",
-                ]
-            )
-
-            rendered = pil_render_text_rgba(
-                self.text,
-                font_path=cabin_font_path,
-                font_size=font_size,
-                color=(255, 0, 0, 255),
-                letter_spacing=char_spacing,
-                bold=False,
-                flip_y=True,
-            )
-            if rendered:
-                text_data, self.text_width, self.text_height = rendered
-
-                self.text_texture = glGenTextures(1)
-                glBindTexture(GL_TEXTURE_2D, self.text_texture)
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-                glTexImage2D(
-                    GL_TEXTURE_2D,
-                    0,
-                    GL_RGBA,
-                    self.text_width,
-                    self.text_height,
-                    0,
-                    GL_RGBA,
-                    GL_UNSIGNED_BYTE,
-                    text_data,
-                )
-                return
-
-        self.text_texture = None
-        
-    def create_display_list(self):
-        if self.display_list is not None:
-            return
-            
-        try:
-            self.display_list = glGenLists(1)
-            if self.display_list == 0:
-                return
-                
-            glNewList(self.display_list, GL_COMPILE)
-            
-            size = 50
-            block_width = 0.7
-            block_height = 0.5
-            
-            glBegin(GL_QUADS)
-            for x in range(-size, size):
-                for z in range(-size, size):
-                    if (x + z) & 1:
-                        glColor3f(1.0, 0.0, 1.0)
-                    else:
-                        glColor3f(0.0, 0.0, 0.0)
-                    
-                    center_x = 0
-                    center_z = 0
-                    
-                    corners = [
-                        (x, z),
-                        (x, z+1),
-                        (x+1, z+1),
-                        (x+1, z)
-                    ]
-                    
-                    vertices = []
-                    for cx, cz in corners:
-                        dx = cx - center_x
-                        dz = cz - center_z
-                        dist = math.sqrt(dx*dx + dz*dz)
-                        
-                        push_amount = dist * 0.03
-                        
-                        if dist > 0:
-                            push_x = (dx / dist) * push_amount
-                            push_z = (dz / dist) * push_amount
-                        else:
-                            push_x = 0
-                            push_z = 0
-                        
-                        x_pos = cx * block_width + push_x
-                        z_pos = cz * block_height + push_z
-                        
-                        vertices.append((x_pos, z_pos))
-                    
-                    glVertex3f(vertices[0][0], vertices[0][1], 0)
-                    glVertex3f(vertices[1][0], vertices[1][1], 0)
-                    glVertex3f(vertices[2][0], vertices[2][1], 0)
-                    glVertex3f(vertices[3][0], vertices[3][1], 0)
-            glEnd()
-            
-            glEndList()
-        except Exception as e:
-            print(f"Error creating missing texture display list: {e}")
-            if self.display_list:
-                try:
-                    glDeleteLists(self.display_list, 1)
-                except:
-                    pass
-                self.display_list = None     
-                
-    def update(self, dt):
-        self.flash_timer += dt
-        if self.flash_timer >= self.next_flash_interval:
-            self.text_visible = not self.text_visible
-            self.flash_timer = 0.0
-            self.next_flash_interval = random.choice([0.01, 0.05, 0.09])
-    
-    def draw(self, display_width, display_height):
-        glDisable(GL_LIGHTING)
-        glDisable(GL_DEPTH_TEST)
-        
-        glMatrixMode(GL_PROJECTION)
-        glPushMatrix()
-        glLoadIdentity()
-        glOrtho(-display_width/200.0, display_width/200.0, -display_height/200.0, display_height/200.0, -1, 1)
-        
-        glMatrixMode(GL_MODELVIEW)
-        glPushMatrix()
-        glLoadIdentity()
-        
-        if self.display_list:
-            glCallList(self.display_list)
-        
-        if self.text_visible and self.text_texture:
-            glEnable(GL_BLEND)
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-            glEnable(GL_TEXTURE_2D)
-            glBindTexture(GL_TEXTURE_2D, self.text_texture)
-            glColor4f(1.0, 1.0, 1.0, 1.0)
-            
-            target_width_percentage = 0.8
-            ortho_width = display_width / 100.0
-            target_width = ortho_width * target_width_percentage
-            
-            scale_factor = target_width / self.text_width
-            
-            w = self.text_width * scale_factor
-            h = self.text_height * scale_factor
-            
-            x = -w / 2.0
-            y = -h / 24.0
-            
-            glBegin(GL_QUADS)
-            glTexCoord2f(0, 0); glVertex2f(x, y)
-            glTexCoord2f(1, 0); glVertex2f(x + w, y)
-            glTexCoord2f(1, 1); glVertex2f(x + w, y + h)
-            glTexCoord2f(0, 1); glVertex2f(x, y + h)
-            glEnd()
-            
-            glDisable(GL_TEXTURE_2D)
-            glDisable(GL_BLEND)
-        
-        glPopMatrix()
-        glMatrixMode(GL_PROJECTION)
-        glPopMatrix()
-        glMatrixMode(GL_MODELVIEW)
-        
-        glEnable(GL_DEPTH_TEST)
-        glEnable(GL_LIGHTING)
-    
-    def cleanup(self):
-        if self.display_list:
-            try:
-                glDeleteLists(self.display_list, 1)
-            except:
-                pass
-            self.display_list = None
-        if self.text_texture:
-            try:
-                glDeleteTextures([self.text_texture])
-            except:
-                pass
-            self.text_texture = None
-
-class CursorRenderer:
-    def __init__(self, cursor_file):
-        self.texture_id = None
-        self.width = 0
-        self.height = 0
-        self.enabled = False
-        self.scale = 1.0  
-        self.load_cursor(cursor_file)
-        
-    def load_cursor(self, cursor_file):
-        try:
-            cursor_candidates = [
-                'assets/images/cursor.png',
-                cursor_file,
-                'cursor.png'
-            ]
-            cursor_path = find_resource(cursor_candidates)
-
-            if cursor_path:
-                try:
-                    cursor_img = pygame.image.load(cursor_path).convert_alpha()
-                    cursor_img = pygame.transform.flip(cursor_img, False, True)
-                    self._create_texture(cursor_img)
-                    self.enabled = True
-                    print(f"Cursor loaded: {cursor_path}")
-                    return True
-                except Exception as e:
-                    if PIL_AVAILABLE:
-                        pil_result = pil_load_image_rgba(cursor_path, flip_y=False)
-                        if pil_result:
-                            cursor_data, width, height = pil_result
-                            self._create_texture_rgba(cursor_data, width, height)
-                            if self.texture_id:
-                                self.enabled = True
-                                print(f"Cursor loaded: {cursor_path}")
-                                return True
-
-                    print(f"Error loading cursor from {cursor_path}: {e}")
-            
-            print("No cursor loaded, using system cursor")
-            return False
-        except Exception as e:
-            print(f"Cursor loading error: {e}")
-            return False
-    
-    def _create_texture(self, cursor_img):
-        try:
-            cursor_data = pygame.image.tostring(cursor_img, "RGBA", True)
-            self.width = cursor_img.get_width()
-            self.height = cursor_img.get_height()
-            
-            self.texture_id = glGenTextures(1)
-            glBindTexture(GL_TEXTURE_2D, self.texture_id)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, self.width, self.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, cursor_data)
-        except Exception as e:
-            print(f"Error creating cursor texture: {e}")
-            self.texture_id = None
-
-    def _create_texture_rgba(self, rgba_data: bytes, width: int, height: int):
-        try:
-            self.width = int(width)
-            self.height = int(height)
-
-            self.texture_id = glGenTextures(1)
-            glBindTexture(GL_TEXTURE_2D, self.texture_id)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-            glTexImage2D(
-                GL_TEXTURE_2D,
-                0,
-                GL_RGBA,
-                self.width,
-                self.height,
-                0,
-                GL_RGBA,
-                GL_UNSIGNED_BYTE,
-                rgba_data,
-            )
-        except Exception as e:
-            print(f"Error creating cursor texture: {e}")
-            self.texture_id = None
-    
-    def set_scale(self, scale):
-        """set cursor scale factor"""
-        self.scale = max(1.0, min(2.0, scale))
-    
-    def draw(self, mouse_pos, display_width, display_height):
-        if not self.enabled or self.texture_id is None:
-            return
-        
-        glDisable(GL_DEPTH_TEST)
-        glDisable(GL_LIGHTING)
-        
-        glMatrixMode(GL_PROJECTION)
-        glPushMatrix()
-        glLoadIdentity()
-        glOrtho(0, display_width, display_height, 0, -1, 1)
-        
-        glMatrixMode(GL_MODELVIEW)
-        glPushMatrix()
-        glLoadIdentity()
-        
-        glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        glEnable(GL_TEXTURE_2D)
-        glBindTexture(GL_TEXTURE_2D, self.texture_id)
-        
-        glColor4f(1.0, 1.0, 1.0, 1.0)
-        x, y = mouse_pos
-        w = self.width * self.scale
-        h = self.height * self.scale
-        
-        glBegin(GL_QUADS)
-        glTexCoord2f(0, 0); glVertex2f(x, y)
-        glTexCoord2f(1, 0); glVertex2f(x + w, y)
-        glTexCoord2f(1, 1); glVertex2f(x + w, y + h)
-        glTexCoord2f(0, 1); glVertex2f(x, y + h)
-        glEnd()
-        
-        glDisable(GL_TEXTURE_2D)
-        glDisable(GL_BLEND)
-        
-        glPopMatrix()
-        glMatrixMode(GL_PROJECTION)
-        glPopMatrix()
-        glMatrixMode(GL_MODELVIEW)
-        
-        glEnable(GL_DEPTH_TEST)
-        glEnable(GL_LIGHTING)
-    
-    def cleanup(self):
-        if self.texture_id:
-            try:
-                glDeleteTextures([self.texture_id])
-            except:
-                pass
-            self.texture_id = None
-            
-class SoundManager:
-    def __init__(self):
-        self.sounds = {}
-        self.music_loaded = False
-        self.initialized = False
-        self._mixer = None
-        
-        try:
-            import pygame.mixer as mixer
-
-            mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
-            self._mixer = mixer
-            self.initialized = True
-        except Exception as e:
-            print(f"Failed to initialize audio: {e}")
-        
-    def load_sound(self, name, filepath):
-        if not self.initialized or not self._mixer:
-            return False
-            
-        try:
-            sound_path = find_resource(filepath)
-            if sound_path:
-                self.sounds[name] = self._mixer.Sound(sound_path)
-                return True
-            return False
-        except Exception as e:
-            print(f"Error loading sound {name}: {e}")
-            return False
-
-    def stop_sound(self, name):
-        if self.initialized and name in self.sounds:
-            try:
-                self.sounds[name].stop()
-            except:
-                pass
-
-    def get_sound_duration(self, name):
-        if self.initialized and name in self.sounds:
-            try:
-                return self.sounds[name].get_length()
-            except:
-                return 0.0
-        return 0.0
-    
-    def load_music(self, filepath):
-        if not self.initialized or not self._mixer:
-            return False
-            
-        try:
-            music_path = find_resource(filepath)
-            if music_path:
-                self._mixer.music.load(music_path)
-                self.music_loaded = True
-                return True
-            return False
-        except Exception as e:
-            print(f"Error loading music: {e}")
-            return False
-    
-    def play_sound(self, name):
-        if self.initialized and name in self.sounds:
-            try:
-                self.sounds[name].play()
-            except:
-                pass
-    
-    def play_music(self, loops=-1, volume=0.5, start=0.0):
-        if self.initialized and self.music_loaded and self._mixer:
-            try:
-                self._mixer.music.set_volume(max(0.0, min(1.0, volume)))
-                self._mixer.music.play(loops, start=start)
-            except:
-                pass
-    
-    def stop_music(self):
-        if self.initialized and self.music_loaded and self._mixer:
-            try:
-                self._mixer.music.stop()
-            except:
-                pass
-
-class RayCaster:
-    def __init__(self):
-        self.viewport = None
-        self.modelview = None
-        self.projection = None
-        self.last_mouse_pos = None
-        self.cached_ray = (None, None)
-        
-    def update_matrices(self):
-        self.viewport = glGetIntegerv(GL_VIEWPORT)
-        self.modelview = glGetDoublev(GL_MODELVIEW_MATRIX)
-        self.projection = glGetDoublev(GL_PROJECTION_MATRIX)
-    
-    def get_ray_from_mouse(self, mouse_x, mouse_y):
-        if self.last_mouse_pos == (mouse_x, mouse_y) and self.cached_ray[0] is not None:
-            return self.cached_ray
-        
-        self.last_mouse_pos = (mouse_x, mouse_y)
-        
-        if self.viewport is None:
-            self.cached_ray = (None, None)
-            return self.cached_ray
-        
-        try:
-            y = self.viewport[3] - mouse_y
-            
-            near_point = gluUnProject(mouse_x, y, 0.0, self.modelview, self.projection, self.viewport)
-            far_point = gluUnProject(mouse_x, y, 1.0, self.modelview, self.projection, self.viewport)
-            
-            dx = far_point[0] - near_point[0]
-            dy = far_point[1] - near_point[1]
-            dz = far_point[2] - near_point[2]
-            
-            length = math.sqrt(dx*dx + dy*dy + dz*dz)
-            if length < 0.0001:
-                self.cached_ray = (None, None)
-                return self.cached_ray
-            
-            inv_length = 1.0 / length
-            ray_dir = [dx * inv_length, dy * inv_length, dz * inv_length]
-            
-            self.cached_ray = (list(near_point), ray_dir)
-            return self.cached_ray
-        except:
-            self.cached_ray = (None, None)
-            return self.cached_ray
-    
-    @staticmethod
-    def ray_sphere_intersection(ray_origin, ray_dir, sphere_pos, sphere_radius):
-        if not ray_origin or not ray_dir or sphere_radius <= 0:
-            return False
-        
-        oc_x = ray_origin[0] - sphere_pos[0]
-        oc_y = ray_origin[1] - sphere_pos[1]
-        oc_z = ray_origin[2] - sphere_pos[2]
-        
-        a = ray_dir[0]*ray_dir[0] + ray_dir[1]*ray_dir[1] + ray_dir[2]*ray_dir[2]
-        if a < 0.0001:
-            return False
-        
-        b = 2.0 * (oc_x * ray_dir[0] + oc_y * ray_dir[1] + oc_z * ray_dir[2])
-        c = oc_x*oc_x + oc_y*oc_y + oc_z*oc_z - sphere_radius * sphere_radius
-        
-        discriminant = b*b - 4*a*c
-        return discriminant >= 0
 
 def get_display_scale(display_width, display_height):
     """calculate scale factor based on display resolution, base: 1920x1080"""
     base_width = 1920.0
     base_height = 1080.0
-    
+
     width_scale = display_width / base_width
     height_scale = display_height / base_height
-    
+
     scale = min(width_scale, height_scale)
-    
+
     return scale
 
 def init_pygame():
     try:
         pygame.init()
-        
+
         if GLUT_AVAILABLE:
             try:
                 glutInit()
             except:
                 print("GLUT initialization failed, continuing without it")
-        
+
         # get_desktop_sizes() is more reliable than display.Info() on Linux/Wayland,
         # especially after screen lock/unlock where display.Info() can return wrong values
         if hasattr(pygame.display, 'get_desktop_sizes'):
@@ -981,16 +93,16 @@ def init_pygame():
             screen_height = display_info.current_h
 
         print(f"Detected screen resolution: {screen_width}x{screen_height}")
-        
+
         if screen_width <= 1366 or screen_height <= 768:
             display = (int(screen_width * 0.8), int(screen_height * 0.8))
         elif screen_width <= 1920 or screen_height <= 1080:
             display = (1280, 720)
         else:
             display = (1600, 900)
-        
+
         print(f"Using display resolution: {display[0]}x{display[1]}")
-        
+
         icon_candidates = [
             'assets/images/sourcebox.png',
             'assets/images/icon.png',
@@ -1005,7 +117,8 @@ def init_pygame():
                 icon = pygame.image.load(icon_path)
                 pygame.display.set_icon(icon)
                 print(f"Icon loaded: {icon_path}")
-            except Exception as e:
+            except Exception as error:
+                fallback_loaded = False
                 if PIL_AVAILABLE:
                     pil_result = pil_load_image_rgba(icon_path, flip_y=False)
                     if pil_result:
@@ -1014,18 +127,18 @@ def init_pygame():
                             icon = pygame.image.frombuffer(icon_data, (width, height), "RGBA")
                             pygame.display.set_icon(icon)
                             print(f"Icon loaded: {icon_path}")
-                            e = None
+                            fallback_loaded = True
                         except Exception:
                             pass
 
-                if e is not None:
-                    print(f"Failed to load icon: {e}")
-        
+                if not fallback_loaded:
+                    print(f"Failed to load icon: {error}")
+
         flags = DOUBLEBUF | OPENGL
-        
+
         screen = pygame.display.set_mode(display, flags)
         pygame.display.set_caption('SourceBox')
-        
+
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_LIGHTING)
         glEnable(GL_LIGHT0)
@@ -1033,21 +146,21 @@ def init_pygame():
         glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
         glShadeModel(GL_SMOOTH)
         glEnable(GL_NORMALIZE)
-        
+
         try:
             pygame.display.gl_set_attribute(pygame.GL_SWAP_CONTROL, 1)
         except:
             pass
-        
+
         glMatrixMode(GL_PROJECTION)
         aspect_ratio = display[0] / display[1]
         gluPerspective(53.25, aspect_ratio, 0.1, 50.0)
         glMatrixMode(GL_MODELVIEW)
-        
+
         glClearColor(0.0, 0.0, 0.0, 1.0)
-        
+
         return display, screen
-        
+
     except Exception as e:
         print(f"Failed to initialize Pygame/OpenGL: {e}")
         sys.exit(1)
@@ -1055,7 +168,7 @@ def init_pygame():
 def update_object_animation(obj, dt):
     if dt <= 0 or dt > 1.0:
         return
-    
+
     if obj.is_hovered and not obj.was_hovered:
         obj.hover_timer = 0.0
         obj.was_hovered = True
@@ -1064,13 +177,13 @@ def update_object_animation(obj, dt):
         obj.scale = obj.base_scale
         obj.was_hovered = False
         return
-    
+
     if obj.is_hovered:
         obj.hover_timer += dt
-        
+
         if obj.hover_timer <= obj.hover_animation_duration:
             progress = obj.hover_timer / obj.hover_animation_duration
-            
+
             if progress <= 0.5:
                 scale_progress = progress * 5.0
                 obj.scale = obj.base_scale * (1.0 + obj.hover_scale_amount * scale_progress)
@@ -1083,29 +196,29 @@ def update_object_animation(obj, dt):
 def draw_object(obj):
     if obj.display_list is None:
         return
-    
+
     glPushMatrix()
     glTranslatef(*obj.position)
-    
+
     if obj.base_rotation[0]:
         glRotatef(obj.base_rotation[0], 1, 0, 0)
     if obj.base_rotation[1]:
         glRotatef(obj.base_rotation[1], 0, 1, 0)
     if obj.base_rotation[2]:
         glRotatef(obj.base_rotation[2], 0, 0, 1)
-    
+
     lighting_disabled = False
     if obj.is_rotating or obj.is_hovered:
         glDisable(GL_LIGHTING)
         lighting_disabled = True
         if obj.is_rotating:
             glRotatef(obj.rotation_angle, 0, 0, 1)
-    
+
     sx = obj.scale * obj.scale_xyz[0]
     sy = obj.scale * obj.scale_xyz[1]
     sz = obj.scale * obj.scale_xyz[2]
     glScalef(sx, sy, sz)
-    
+
     if obj.is_rotating:
         glColor3f(0.0, 0.9, 1.0)
     elif obj.is_hovered:
@@ -1119,7 +232,7 @@ def draw_object(obj):
 
     if lighting_disabled:
         glEnable(GL_LIGHTING)
-    
+
     glPopMatrix()
 
 def update_object_rotation(obj, dt):
@@ -1129,74 +242,75 @@ def update_object_rotation(obj, dt):
 def check_object_hover(mouse_pos, ray_caster, objects, sound_manager):
     if not objects:
         return None
-    
+
     mouse_x, mouse_y = mouse_pos
     ray_origin, ray_dir = ray_caster.get_ray_from_mouse(mouse_x, mouse_y)
-    
+
     if ray_origin is None or ray_dir is None:
         return None
-    
+
     hovered_obj = None
     min_distance = float('inf')
-    
+
     for obj in objects:
         if obj.is_rotating:
             continue
-        
+
         if ray_caster.ray_sphere_intersection(ray_origin, ray_dir, obj.position, obj.bounding_radius):
             dx = obj.position[0] - ray_origin[0]
             dy = obj.position[1] - ray_origin[1]
             dz = obj.position[2] - ray_origin[2]
             distance = dx*dx + dy*dy + dz*dz
-            
+
             if distance < min_distance:
                 min_distance = distance
                 hovered_obj = obj
-    
+
     for obj in objects:
         new_hover_state = (obj == hovered_obj)
         if new_hover_state and not obj.is_hovered:
             sound_manager.play_sound('hover')
         obj.is_hovered = new_hover_state
-    
+
     return hovered_obj
 
 def check_object_click(mouse_pos, ray_caster, objects):
     if not objects:
         return None
-    
+
     mouse_x, mouse_y = mouse_pos
     ray_origin, ray_dir = ray_caster.get_ray_from_mouse(mouse_x, mouse_y)
-    
+
     if ray_origin is None or ray_dir is None:
         return None
-    
+
     clicked_obj = None
     min_distance = float('inf')
-    
+
     for obj in objects:
         if ray_caster.ray_sphere_intersection(ray_origin, ray_dir, obj.position, obj.bounding_radius):
             dx = obj.position[0] - ray_origin[0]
             dy = obj.position[1] - ray_origin[1]
             dz = obj.position[2] - ray_origin[2]
             distance = dx*dx + dy*dy + dz*dz
-            
+
             if distance < min_distance:
                 min_distance = distance
                 clicked_obj = obj
-    
+
     return clicked_obj
 
 def main():
-    print(f"Running on: {PLATFORM}")
-    
-    display, screen = init_pygame()
-    
+    configure_runtime_diagnostics()
+    print(f"Running on: {OPERATING_SYSTEM}")
+
+    display, _screen = init_pygame()
+
     original_display = display
-    
+
     display_scale = get_display_scale(display[0], display[1])
     print(f"Display scale factor: {display_scale:.2f}")
-    
+
     sound_manager = SoundManager()
     sound_manager.load_sound('hover', 'assets/sounds/click.wav')
     sound_manager.load_sound('cube_click', 'assets/sounds/friend_join.wav')
@@ -1207,154 +321,69 @@ def main():
     # until like when person go to voidside tracker or person go back to main menu
     # when song restarts, it will start 2 sec later so lol
     sound_manager.play_music(loops=-1, volume=0.3)
-    
-    bridge = None
-    gmod_bridge = None
-    
-    if BRIDGE_AVAILABLE:
-        try:
-            bridge = SourceBridge()
-            if bridge and bridge.active_game:
-                # check if it's a GMod game
-                if 'Garry\'s Mod' in bridge.active_game:
-                    print("\n" + "="*70)
-                    print("SETUP COMPLETE - GARRY'S MOD")
-                    print("="*70)
-                    print(f"\n[game] {bridge.active_game}")
-                    print(f"[session] {bridge.session_id}")
-                    print("\n[features]")
-                    print("  lua bridge - spawn props from SourceBox")
-                    print("  picker - aimbot (picker_toggle, picker_next)")
-                    print("  auto-spawner - spawns cube on map load")
-                    print("\n[usage] click cube in SourceBox to spawn")
-                    print("  [addon] installed to addons/sourcebox/lua/")
-                    print("="*70 + "\n")
-                # only install VScript features for supported Source Engine games
-                elif bridge.vscripts_path:
-                    # check if Mapbase - scripts already installed by MapbaseBridge
-                    if bridge.mapbase_bridge is None:
-                        bridge.install_listener()
-                        bridge.install_picker()     
-                        bridge.install_awp_quit()
-                        bridge.install_auto_spawner()  
-                        bridge.setup_mapspawn()
-                    
-                    bridge.start_listening()
 
-                    print("\n" + "="*70)
-                    print("SETUP COMPLETE - SOURCE ENGINE")
-                    print("="*70)
-                    print(f"\n[game] {bridge.active_game}")
-                    print(f"[session] {bridge.session_id}")
-                    print("\n[features]")
-                    print("  python bridge - spawn the cube from sourcebox")
-                    print("  picker - aimbot (script PickerToggle and PickerNext)")
-                    print("  awp quit - shoot srcbox with awp to quit the game")
-                    print("  auto-spawner - spawns 1 cube at random locations on map load")
-                    print("\n[auto-load] all scripts start automatically on map load")
-                    print("\n[manual] if needed:")
-                    if bridge.mapbase_bridge:
-                        print("         exec mapbase_default")
-                        print("         script_execute vscript_server")
-                    else:
-                        print("         script_execute python_listener")
-                    print("="*70 + "\n")
-                else:
-                    print("\n" + "="*70)
-                    print("SETUP COMPLETE - SOURCE ENGINE")
-                    print("="*70)
-                    print(f"\n[game] {bridge.active_game}")
-                    print(f"[session] {bridge.session_id}")
-                    print("\n[features]")
-                    if PLATFORM == 'Windows' and WINDOWS_API_AVAILABLE:
-                        print(f"  source game with no vscript! ONLY srcbox spawn is supported!")
-                        print(f"  mode: legacy console injection (no VScript)")
-                        print("="*70 + "\n")
-                        print("\n[usage] click cube in SourceBox to spawn")
-                        print("="*70 + "\n")
-                    else:
-                        print(f"  mode: nothing (no VScript and console injection not available in Linux)")
-        except Exception as e:
-            print(f"Bridge initialization error: {e}")
-            bridge = None
-    
-    # try GMod bridge if Source Engine bridge not active
-    if GMOD_BRIDGE_AVAILABLE and (not bridge or not bridge.active_game):
-        try:
-            gmod_bridge = GModBridge()
-            if gmod_bridge and gmod_bridge.is_connected():
-                print("\n" + "="*70)
-                print("SETUP COMPLETE - GARRY'S MOD")
-                print("="*70)
-                print(f"\n[game] {gmod_bridge.active_gmod}")
-                print(f"[data path] {gmod_bridge.data_path}")
-                print(f"[session] {gmod_bridge.session_id}")
-                print("\n[features]")
-                print("  python bridge - spawn props from SourceBox")
-                print("  picker - aimbot (picker_toggle, picker_next)")
-                print("  auto-spawner - spawns cube on map load")
-                print("\n[usage] click cube in SourceBox to spawn")
-                print("  [addon] installed to addons/sourcebox/lua/")
-                print("="*70 + "\n")
-        except Exception as e:
-            print(f"GMod bridge initialization error: {e}")
-            gmod_bridge = None
-    
+    bridge_manager = BridgeManager(
+        SourceBridge if BRIDGE_AVAILABLE else None,
+        GModBridge if GMOD_BRIDGE_AVAILABLE else None,
+        platform_name=OPERATING_SYSTEM,
+        windows_api_available=WINDOWS_API_AVAILABLE,
+    ).initialize()
+
     cursor_renderer = CursorRenderer('assets/images/cursor.png')
     cursor_renderer.set_scale(display_scale)
     if cursor_renderer.enabled:
         pygame.mouse.set_visible(False)
         pygame.event.set_grab(False)
-    
+
     objects = [
-        Object3D("cube", 
-                 position=[-1.21, 2.11, -1.14], 
-                 rotation=[1467.99, -1441.71, 27.87], 
-                 scale=1.22, 
+        Object3D("cube",
+                 position=[-1.21, 2.11, -1.14],
+                 rotation=[1467.99, -1441.71, 27.87],
+                 scale=1.22,
                  scale_xyz=[1.09, 0.99, 1.04],
                  brightness=0.7),
-        Object3D("sphere", 
-                 position=[0.03, 2.68, -1.03], 
-                 rotation=[-269.60, -18.40, 0.00], 
-                 scale=1.69, 
+        Object3D("sphere",
+                 position=[0.03, 2.68, -1.03],
+                 rotation=[-269.60, -18.40, 0.00],
+                 scale=1.69,
                  scale_xyz=[0.96, 0.97, 0.98],
                  brightness=0.7),
-        Object3D("cone", 
-                 position=[6.29, 2.49, 1.49], 
-                 rotation=[157.67, 19.35, 335.96], 
-                 scale=1.06, 
+        Object3D("cone",
+                 position=[6.29, 2.49, 1.49],
+                 rotation=[157.67, 19.35, 335.96],
+                 scale=1.06,
                  scale_xyz=[0.73, 1.51, 1.11],
                  brightness=0.7)
     ]
-    
+
     camera = Camera()
     light = Light()
     board = Checkerboard()
     ray_caster = RayCaster()
     missing_texture_scene = MissingTextureScene(sound_manager, display_scale)
     cone_scene = ConeScene(sound_manager, display_scale)
-    
+
     current_scene = "main"
-    
+
     board.create_display_list()
     for obj in objects:
         obj.create_display_list()
     missing_texture_scene.create_display_list()
     cone_scene.create_display_list()
-    
+
     clock = pygame.time.Clock()
     running = True
-    
+
     frame_count = 0
     fps_timer = time.time()
-    
+
     try:
         while running:
             dt = clock.tick(60) / 1000.0
             dt = min(dt, 0.1)
-            
+
             mouse_pos = pygame.mouse.get_pos()
-            
+
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
@@ -1367,13 +396,13 @@ def main():
                     if event.button == 1:
                         if current_scene == "main":
                             clicked_obj = check_object_click(mouse_pos, ray_caster, objects)
-                            
+
                             if clicked_obj and clicked_obj.type == "sphere":
                                 current_scene = "error"
                                 sound_manager.stop_music()
                                 pygame.mouse.set_visible(False)
                                 cursor_renderer.enabled = False
-                            
+
                             elif clicked_obj and clicked_obj.type == "cone":
                                 sound_manager.play_sound('cone_click')
 
@@ -1424,7 +453,7 @@ def main():
                                 remaining = int(cone_duration * 1000) - 400 if cone_duration > 0 else 100
                                 if remaining > 0:
                                     pygame.time.wait(remaining)
-                                
+
                                 if hasattr(pygame.display, 'get_desktop_sizes'):
                                     desktop_sizes = pygame.display.get_desktop_sizes()
                                     screen_width, screen_height = desktop_sizes[0] if desktop_sizes else (1920, 1080)
@@ -1434,40 +463,21 @@ def main():
 
                                 new_width = 548
                                 new_height = 525
-                                
+
                                 os.environ['SDL_VIDEO_WINDOW_POS'] = f"{(screen_width - new_width) // 2},{(screen_height - new_height) // 2}"
-                                
-                                screen = pygame.display.set_mode((new_width, new_height), DOUBLEBUF | OPENGL)
+
+                                pygame.display.set_mode((new_width, new_height), DOUBLEBUF | OPENGL)
                                 display = (new_width, new_height)
-                                
+
                                 glViewport(0, 0, new_width, new_height)
-                                
+
                                 current_scene = "cone"
                                 sound_manager.play_music(loops=-1, volume=0.3, start=1.0)
-                                
+
                             elif clicked_obj and clicked_obj.type == "cube":
                                 sound_manager.play_sound('cube_click')
-                                
-                                # try Source Engine bridge first
-                                if bridge and bridge.active_game:
-                                    try:
-                                        bridge.spawn("props/srcbox/srcbox.mdl", 200)
-                                        time.sleep(0.1)
-                                        # only reinstall AWP outputs for non-Mapbase games
-                                        if bridge.mapbase_bridge is None:
-                                            bridge.reinstall_awp_outputs()
-                                    except Exception as e:
-                                        print(f"Bridge spawn error: {e}")
-                                
-                                # try GMod bridge if VScript source games not available
-                                elif gmod_bridge and gmod_bridge.is_connected():
-                                    try:
-                                        gmod_bridge.spawn_model("props/srcbox/srcbox.mdl", 200)
-                                        # sometimes lua can fail processing it so add this delay
-                                        time.sleep(0.1)
-                                    except Exception as e:
-                                        print(f"GMod bridge spawn error: {e}")
-                                        
+                                bridge_manager.spawn_default_cube()
+
                                 if clicked_obj.is_rotating:
                                     clicked_obj.rotation_angle = 0.0
                                 else:
@@ -1477,7 +487,7 @@ def main():
                                     clicked_obj.base_rotation = [1422.99, -1461.21, 24.37]
                                     clicked_obj.scale = 1.22
                                     clicked_obj.scale_xyz = [1.15, 1.19, 1.19]
-                        
+
                         elif current_scene == "cone":
                             # check triangle click in cone scene (LEFT-CLICK ONLY)
                             if cone_scene.check_triangle_click(mouse_pos, display[0], display[1]):
@@ -1499,10 +509,10 @@ def main():
 
                                 # 3 second delay (minus flash time)
                                 pygame.time.wait(2600)
-                                
+
                                 # return to main menu
                                 current_scene = "main"
-                                
+
                                 # restore to ORIGINAL display size
                                 if hasattr(pygame.display, 'get_desktop_sizes'):
                                     desktop_sizes = pygame.display.get_desktop_sizes()
@@ -1510,42 +520,42 @@ def main():
                                 else:
                                     _di = pygame.display.Info()
                                     screen_width, screen_height = _di.current_w, _di.current_h
-                                
+
                                 # center the window with original size
                                 os.environ['SDL_VIDEO_WINDOW_POS'] = f"{(screen_width - original_display[0]) // 2},{(screen_height - original_display[1]) // 2}"
-                                
-                                screen = pygame.display.set_mode(original_display, DOUBLEBUF | OPENGL)
+
+                                pygame.display.set_mode(original_display, DOUBLEBUF | OPENGL)
                                 display = original_display
-                                
+
                                 # restore OpenGL viewport and perspective
                                 glViewport(0, 0, display[0], display[1])
-                                
+
                                 glMatrixMode(GL_PROJECTION)
                                 glLoadIdentity()
                                 aspect_ratio = display[0] / display[1]
                                 gluPerspective(53.25, aspect_ratio, 0.1, 50.0)
                                 glMatrixMode(GL_MODELVIEW)
-                                
+
                                 # restore cursor
                                 cursor_renderer.enabled = True
                                 pygame.mouse.set_visible(False)
-                                
+
                                 # restart music
                                 sound_manager.stop_music()
                                 sound_manager.play_music(loops=-1, volume=0.3, start=1.0)
-            
+
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-            
+
             if current_scene == "main":
                 for obj in objects:
                     update_object_rotation(obj, dt)
                     update_object_animation(obj, dt)
-                
+
                 camera.apply()
                 light.apply()
-                
+
                 ray_caster.update_matrices()
-                
+
                 check_object_hover(mouse_pos, ray_caster, objects, sound_manager)
 
                 board.draw(display[0], display[1])
@@ -1556,24 +566,24 @@ def main():
                     draw_object(obj)
 
                 cursor_renderer.draw(mouse_pos, display[0], display[1])
-                
+
             elif current_scene == "error":
                 missing_texture_scene.update(dt)
                 missing_texture_scene.draw(display[0], display[1])
 
-            elif current_scene == "cone":  
+            elif current_scene == "cone":
                 cone_scene.update(dt)
                 cone_scene.check_triangle_hover(mouse_pos, display[0], display[1])
                 cone_scene.draw(display[0], display[1])
                 cursor_renderer.draw(mouse_pos, display[0], display[1])
 
             pygame.display.flip()
-            
+
             frame_count += 1
             if time.time() - fps_timer >= 1.0:
                 frame_count = 0
                 fps_timer = time.time()
-            
+
     except KeyboardInterrupt:
         print("\nShutting down...")
     except Exception as e:
@@ -1582,34 +592,23 @@ def main():
         traceback.print_exc()
     finally:
         print("Cleaning up...")
-        
+
         cursor_renderer.cleanup()
         sound_manager.stop_music()
-        
+
         board.cleanup()
         for obj in objects:
             obj.cleanup()
         missing_texture_scene.cleanup()
         cone_scene.cleanup()
-        
-        if bridge and BRIDGE_AVAILABLE and hasattr(bridge, 'active_game') and bridge.active_game:
-            try:
-                bridge.stop()
-            except:
-                pass
-        
-        # cleanup GMod bridge
-        if gmod_bridge and GMOD_BRIDGE_AVAILABLE:
-            try:
-                gmod_bridge.cleanup()
-            except:
-                pass
-        
+
+        bridge_manager.cleanup()
+
         try:
             pygame.quit()
         except:
             pass
-        
+
         print("Goodbye!")
 
 if __name__ == "__main__":
