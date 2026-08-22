@@ -10,6 +10,10 @@ An application with Source Engine integration through VScript and Garry's Mod Lu
 ![Python](https://img.shields.io/badge/python-3.7+-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
+<p align="center">
+  <img src="assets/images/sourcebox-app.png" alt="SourceBox main application window" width="900">
+</p>
+
 > [!NOTE]
 > SRCBOX cube model is a custom model! You need to install it into your game custom folder otherwise it won't spawn when you press the cube in SourceBox window.
 > It should be in `YOUR_GAME\custom\srcbox\models\props\srcbox\srcbox.mdl`.
