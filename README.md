@@ -1,5 +1,9 @@
 # SourceBox
 
+<p align="center">
+  <img src="assets/images/sourcebox.png" alt="SourceBox logo" width="256">
+</p>
+
 An application with Source Engine integration through VScript and Garry's Mod Lua scripting.
 
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue)
