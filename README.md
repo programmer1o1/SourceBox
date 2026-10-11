@@ -23,6 +23,7 @@ An application with Source Engine integration through VScript and Garry's Mod Lu
 ## Features
 - **Python Bridge**: Spawn props directly from SourceBox into your game
 - **Multi-game Support**: Works across most Source Engine games
+- **Voidside PULL Mode**: Press **P** in the Voidside scene to hold the current target, silence the music, and show "P U L L". It also triggers automatically while a demo is playing in a Source game
 
 ### VScript Features (TF2 Branch Source Engine Games)
 - **Picker (Aimbot)**: Advanced targeting system with priority targeting (Players → Props)
@@ -125,6 +126,7 @@ python Sourcebox.py
   - **Cube**: Spawn SRCBOX cube in-game
   - **Sphere**: Toggle error scene
   - **Cone**: Enter Voidside tracker mode
+- **P** (Voidside scene): Toggle PULL mode
 - **ESC**: Exit application
 
 ### Source Engine Integration (VScript)
@@ -364,6 +366,13 @@ sourcebox_spawn props/yourmod/model.mdl 300
 - **Files**: `python_command.txt`, `python_response.txt`
 - **Format**: JSON with session ID and command counter
 - **Rate**: Commands checked every 100ms
+
+### Demo Detection (PULL Mode)
+- **Method**: A hidden worker process (SourceBox relaunched with `--demo-scan-worker`) checks Source game processes, found by their `steamapps` path plus `wineserver`, for open `.dem` files with `psutil` about once a second
+- **Why a separate process**: `psutil` holds Python's global lock while listing open files, which would freeze rendering if it ran inside the app
+- **Requirements**: No launch options or game-side script
+- **Verified**: macOS with CrossOver (Counter-Strike: Source, Half-Life 2: Deathmatch); Windows and Linux are untested
+- **Limitation**: Recording a demo also triggers PULL mode
 
 ### Mapbase VScript Communication
 - **Method**: File I/O via `vscript_io/` folder (Mapbase-specific)

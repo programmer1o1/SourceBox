@@ -1,3 +1,14 @@
+import sys
+
+# The demo-detection worker is this same program relaunched with a flag. Handle
+# it before the heavy graphics imports so the worker starts fast and stays small.
+if "--demo-scan-worker" in sys.argv:
+    from sourcebox.demo_watcher import WORKER_FLAG, run_scan_worker, _lower_priority
+
+    _lower_priority()
+    run_scan_worker(int(sys.argv[sys.argv.index(WORKER_FLAG) + 1]), sys.stdout)
+    sys.exit(0)
+
 import pygame
 import os
 import sys
@@ -372,7 +383,7 @@ def main():
     missing_texture_scene.create_display_list()
     cone_scene.create_display_list()
 
-    demo_watcher = DemoWatcher()
+    demo_watcher = DemoWatcher(main_script=os.path.abspath(__file__))
     demo_watcher.start()
     last_demo_playing = False
 

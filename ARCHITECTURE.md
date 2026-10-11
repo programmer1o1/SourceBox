@@ -7,8 +7,9 @@ commands and PyInstaller builds. It owns the application loop and scene switchin
 
 - `sourcebox/audio.py` manages sound effects and music.
 - `sourcebox/cursor.py` loads and renders the custom cursor.
-- `sourcebox/demo_watcher.py` detects in-game demo playback by polling for open
-  `.dem` files; the cone scene uses it to enter PULL mode.
+- `sourcebox/demo_watcher.py` detects in-game demo playback by scanning for open
+  `.dem` files in a separate worker process (so `psutil` can never stall rendering);
+  the cone scene uses it to enter PULL mode.
 - `sourcebox/raycast.py` converts mouse positions into world-space rays.
 - `sourcebox/resources.py` resolves development and PyInstaller resources.
 - `sourcebox/steam.py` contains shared Steam installation, library, and CrossOver
