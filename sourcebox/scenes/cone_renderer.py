@@ -20,19 +20,35 @@ class ConeRendererMixin:
         bold: bool = False,
         letter_spacing: int = 0,
         flip_y: bool = False,
+        italic: bool = False,
     ) -> tuple[bytes, int, int] | None:
         if self._text_backend == "pygame":
             try:
-                key = (self._cabin_font_path, font_size, bold)
+                key = (self._cabin_font_path, font_size, bold, italic)
                 font = self._font_cache.get(key)
                 if font is None:
                     if self._cabin_font_path:
                         font = pygame.font.Font(self._cabin_font_path, font_size)
                     else:
                         font = pygame.font.Font(None, font_size)
+                    font.set_italic(italic)
                     self._font_cache[key] = font
 
-                surface = font.render(text, True, color[:3])
+                if letter_spacing and len(text) > 1:
+                    glyphs = [font.render(ch, True, color[:3]) for ch in text]
+                    width = int(
+                        sum(g.get_width() for g in glyphs)
+                        + letter_spacing * (len(glyphs) - 1)
+                    ) + 1
+                    surface = pygame.Surface(
+                        (width, glyphs[0].get_height()), pygame.SRCALPHA
+                    )
+                    x = 0
+                    for glyph in glyphs:
+                        surface.blit(glyph, (x, 0))
+                        x += glyph.get_width() + letter_spacing
+                else:
+                    surface = font.render(text, True, color[:3])
                 data = pygame.image.tostring(surface, "RGBA", flip_y)
                 return data, surface.get_width(), surface.get_height()
             except Exception:
@@ -227,6 +243,53 @@ class ConeRendererMixin:
             text_height,
             x_pos,
             y_pos,
+            use_mipmaps=False,
+        )
+        glDisable(GL_TEXTURE_2D)
+        glDisable(GL_BLEND)
+        glEnable(GL_DEPTH_TEST)
+        glEnable(GL_LIGHTING)
+
+        glPopMatrix()
+        glMatrixMode(GL_PROJECTION)
+        glPopMatrix()
+        glMatrixMode(GL_MODELVIEW)
+
+    def draw_pull_text(self, display_width, display_height):
+        rendered = self._render_text_rgba(
+            "P U L L",
+            font_size=44,
+            color=(255, 110, 30, 255),
+            italic=True,
+            letter_spacing=0.5,
+            flip_y=False,
+        )
+        if not rendered:
+            return
+
+        text_data, text_width, text_height = rendered
+
+        glMatrixMode(GL_PROJECTION)
+        glPushMatrix()
+        glLoadIdentity()
+        glOrtho(0, display_width, display_height, 0, -1, 1)
+
+        glMatrixMode(GL_MODELVIEW)
+        glPushMatrix()
+        glLoadIdentity()
+
+        glDisable(GL_DEPTH_TEST)
+        glDisable(GL_LIGHTING)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glEnable(GL_TEXTURE_2D)
+
+        self.render_text_texture(
+            text_data,
+            text_width,
+            text_height,
+            (display_width - text_width) // 2,
+            int(display_height * 0.64) - text_height // 2,
             use_mipmaps=False,
         )
         glDisable(GL_TEXTURE_2D)
@@ -1032,6 +1095,8 @@ class ConeRendererMixin:
             self.draw_target()
             self.draw_cyan_triangle_sprite(display_width, display_height)
             self.draw_coordinate_display(display_width, display_height)
+            if self.pull_active:
+                self.draw_pull_text(display_width, display_height)
 
             glDisable(GL_FOG)
             glDisable(GL_BLEND)

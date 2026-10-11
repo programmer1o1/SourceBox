@@ -13,6 +13,7 @@ from rendering_helpers import PIL_AVAILABLE, pil_load_image_rgba
 from sourcebox.audio import SoundManager
 from sourcebox.bridges import BridgeManager
 from sourcebox.cursor import CursorRenderer
+from sourcebox.demo_watcher import DemoWatcher
 from sourcebox.diagnostics import configure_runtime_diagnostics
 from sourcebox.raycast import RayCaster
 from sourcebox.rendering.main_scene import Camera, Checkerboard, Light, Object3D
@@ -371,6 +372,10 @@ def main():
     missing_texture_scene.create_display_list()
     cone_scene.create_display_list()
 
+    demo_watcher = DemoWatcher()
+    demo_watcher.start()
+    last_demo_playing = False
+
     clock = pygame.time.Clock()
     running = True
 
@@ -382,6 +387,13 @@ def main():
             dt = clock.tick(60) / 1000.0
             dt = min(dt, 0.1)
 
+            # hold the cone scene (PULL) when a demo starts or stops in-game
+            demo_playing = demo_watcher.demo_playing
+            if demo_playing != last_demo_playing:
+                last_demo_playing = demo_playing
+                if current_scene == "cone":
+                    cone_scene.set_pull(demo_playing)
+
             mouse_pos = pygame.mouse.get_pos()
 
             for event in pygame.event.get():
@@ -391,6 +403,8 @@ def main():
                     if event.key == pygame.K_ESCAPE:
                         running = False
                     if current_scene == "cone":
+                        if event.key == pygame.K_p:
+                            cone_scene.toggle_pull()
                         cone_scene.handle_event(event)
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:
@@ -473,6 +487,8 @@ def main():
 
                                 current_scene = "cone"
                                 sound_manager.play_music(loops=-1, volume=0.3, start=1.0)
+                                if demo_watcher.demo_playing:
+                                    cone_scene.set_pull(True)
 
                             elif clicked_obj and clicked_obj.type == "cube":
                                 sound_manager.play_sound('cube_click')
@@ -512,6 +528,7 @@ def main():
 
                                 # return to main menu
                                 current_scene = "main"
+                                cone_scene.pull_active = False
 
                                 # restore to ORIGINAL display size
                                 if hasattr(pygame.display, 'get_desktop_sizes'):
@@ -593,6 +610,7 @@ def main():
     finally:
         print("Cleaning up...")
 
+        demo_watcher.stop()
         cursor_renderer.cleanup()
         sound_manager.stop_music()
 

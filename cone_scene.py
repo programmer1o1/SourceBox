@@ -113,6 +113,9 @@ class ConeScene(ConeRendererMixin):
         self.triangle_hovered = False
         self.triangle_scale = 1.0
 
+        # PULL mode: P key holds the current target and silences the music
+        self.pull_active = False
+
         # target switching
         self.target_timer = 0.0
         # Give the opening view a brief, consistent hold.
@@ -374,6 +377,20 @@ class ConeScene(ConeRendererMixin):
     def handle_event(self, event):
         pass
 
+    def toggle_pull(self):
+        self.set_pull(not self.pull_active)
+
+    def set_pull(self, active):
+        if active == self.pull_active:
+            return
+        self.pull_active = active
+        if self.sound_manager:
+            self.sound_manager.play_sound('hover')
+            if self.pull_active:
+                self.sound_manager.stop_music()
+            else:
+                self.sound_manager.play_music(loops=-1, volume=0.3, start=1.0)
+
     def update(self, dt):
         # friend_join random sound
         if self.friend_join_active and self.sound_manager:
@@ -466,7 +483,9 @@ class ConeScene(ConeRendererMixin):
 
         # target switching
         self.target_timer += dt
-        if self.target_timer >= self.target_switch_interval:
+        if self.pull_active:
+            self.target_timer = 0.0
+        elif self.target_timer >= self.target_switch_interval:
             self.target_timer = 0.0
             self.target_switch_interval = self._next_teleport_interval()
 

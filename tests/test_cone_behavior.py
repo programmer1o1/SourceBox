@@ -70,9 +70,8 @@ class CameraBehaviorTests(unittest.TestCase):
 
 
 class PointerBehaviorTests(unittest.TestCase):
-    def test_rotating_pointer_updates_all_axes_slowly(self):
+    def test_pointer_rotation_updates_all_axes(self):
         pointer = cone_scene.GreyCone.__new__(cone_scene.GreyCone)
-        pointer.rotates = True
         pointer.rotation = [359.0, 10.0, 20.0]
         pointer.rotation_speed = [2.0, -2.0, 1.0]
         pointer.state = "still"
@@ -83,6 +82,46 @@ class PointerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(pointer.rotation, [1.0, 8.0, 21.0])
         self.assertEqual(pointer.position, [0.0, 0.0, 0.0])
+
+    def test_every_pointer_tumbles_at_15_to_30_degrees_per_second(self):
+        for _ in range(50):
+            pointer = cone_scene.GreyCone([0.0, 0.0, 0.0])
+            for speed in pointer.rotation_speed:
+                self.assertTrue(15.0 <= abs(speed) <= 30.0)
+
+
+class PullModeTests(unittest.TestCase):
+    def _scene(self):
+        sounds = mock.Mock()
+        with mock.patch.object(cone_scene.ConeScene, "__init__", lambda self: None):
+            scene = cone_scene.ConeScene()
+        scene.sound_manager = sounds
+        scene.pull_active = False
+        return scene, sounds
+
+    def test_toggle_on_clicks_and_stops_music(self):
+        scene, sounds = self._scene()
+        scene.toggle_pull()
+        self.assertTrue(scene.pull_active)
+        sounds.play_sound.assert_called_once_with('hover')
+        sounds.stop_music.assert_called_once()
+        sounds.play_music.assert_not_called()
+
+    def test_toggle_off_restarts_music(self):
+        scene, sounds = self._scene()
+        scene.toggle_pull()
+        scene.toggle_pull()
+        self.assertFalse(scene.pull_active)
+        sounds.play_music.assert_called_once_with(loops=-1, volume=0.3, start=1.0)
+
+    def test_set_pull_is_idempotent(self):
+        scene, sounds = self._scene()
+        scene.set_pull(True)
+        scene.set_pull(True)
+        sounds.stop_music.assert_called_once()
+        scene.set_pull(False)
+        scene.set_pull(False)
+        sounds.play_music.assert_called_once()
 
 
 if __name__ == "__main__":

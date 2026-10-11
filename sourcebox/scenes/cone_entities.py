@@ -31,19 +31,15 @@ class GreyCone:
             random.uniform(0, 360),
             random.uniform(0, 360),
         ]
-        self.rotates = random.random() < 0.5
         self.rotation_speed = [
-            random.uniform(-3.0, 3.0),
-            random.uniform(-3.0, 3.0),
-            random.uniform(-3.0, 3.0),
+            random.choice((-1, 1)) * random.uniform(15.0, 30.0) for _ in range(3)
         ]
 
     def update(self, dt):
-        if self.rotates:
-            for axis in range(3):
-                self.rotation[axis] = (
-                    self.rotation[axis] + self.rotation_speed[axis] * dt
-                ) % 360.0
+        for axis in range(3):
+            self.rotation[axis] = (
+                self.rotation[axis] + self.rotation_speed[axis] * dt
+            ) % 360.0
 
         if self.state != "still":
             self.position[0] += self.velocity[0] * dt
