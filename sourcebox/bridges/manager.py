@@ -2,6 +2,8 @@
 
 import time
 
+from sourcebox import install_manifest
+
 
 class BridgeManager:
     def __init__(
@@ -11,6 +13,7 @@ class BridgeManager:
         *,
         platform_name="",
         windows_api_available=False,
+        manifest=None,
     ):
         self.source_bridge_class = source_bridge_class
         self.gmod_bridge_class = gmod_bridge_class
@@ -20,8 +23,18 @@ class BridgeManager:
         self.gmod = None
         self.status = "not_initialized"
         self.diagnostic_message = ""
+        self.manifest = manifest
+
+    def _manifest(self):
+        return self.manifest or install_manifest.current()
 
     def initialize(self):
+        # files a SourceBox that was killed or crashed did not get to remove
+        leftovers = self._manifest().undo_leftovers()
+        if leftovers:
+            print("\n[cleanup] removing files left by an earlier SourceBox")
+            install_manifest.report(leftovers)
+
         if self.source_bridge_class:
             try:
                 self.source = self.source_bridge_class()
@@ -43,6 +56,8 @@ class BridgeManager:
             except Exception as error:
                 print(f"GMod bridge initialization error: {error}")
                 self.gmod = None
+
+        self._track_runtime_files()
 
         if self.status != "connected":
             self.status = "no_game"
@@ -66,6 +81,11 @@ class BridgeManager:
         bridge = self.source
         if "Garry's Mod" in bridge.active_game:
             self._print_source_gmod_setup(bridge)
+            return
+
+        if getattr(bridge, "modern_bridge", None) is not None:
+            bridge.start_listening()
+            self._print_modern_vscript_setup(bridge)
             return
 
         if bridge.vscripts_path:
@@ -131,6 +151,25 @@ class BridgeManager:
         print("=" * 70 + "\n")
 
     @staticmethod
+    def _print_modern_vscript_setup(bridge):
+        modern = bridge.modern_bridge
+        print("\n" + "=" * 70)
+        print("SETUP COMPLETE - SOURCE ENGINE")
+        print("=" * 70)
+        print(f"\n[game] {bridge.active_game}")
+        print(f"[session] {bridge.session_id}")
+        print(f"[mode] {modern.description}")
+        print("\n[features]")
+        print("  python bridge - spawn the cube from sourcebox")
+        print("  auto-spawner - spawns 1 cube near the player on map load")
+        print("\n[auto-load] the bridge starts on the next map load")
+        print("\n[manual] if needed:")
+        print("         script_execute sourcebox_bridge")
+        if modern.response_file is None:
+            print("\n[note] this game cannot write files: spawn results show in its console")
+        print("=" * 70 + "\n")
+
+    @staticmethod
     def _print_gmod_setup(bridge):
         print("\n" + "=" * 70)
         print("SETUP COMPLETE - GARRY'S MOD")
@@ -152,7 +191,10 @@ class BridgeManager:
             try:
                 self.source.spawn(model, 200)
                 time.sleep(0.1)
-                if self.source.mapbase_bridge is None:
+                if (
+                    self.source.mapbase_bridge is None
+                    and getattr(self.source, "modern_bridge", None) is None
+                ):
                     self.source.reinstall_awp_outputs()
             except Exception as error:
                 print(f"Bridge spawn error: {error}")
@@ -168,6 +210,16 @@ class BridgeManager:
 
         print(f"[bridge] Cube spawn skipped: {self.diagnostic_message}")
 
+    def _track_runtime_files(self):
+        # command and response files come and go while SourceBox runs; the game
+        # writes the responses itself, so they are recorded here
+        manifest = self._manifest()
+        for bridge in (self.source, self.gmod):
+            for name in ("command_file", "response_file"):
+                path = getattr(bridge, name, None) if bridge else None
+                if isinstance(path, str) and path:
+                    manifest.track(path)
+
     def cleanup(self):
         if self.source and getattr(self.source, "active_game", None):
             try:
@@ -180,3 +232,12 @@ class BridgeManager:
                 self.gmod.cleanup()
             except Exception:
                 pass
+
+        # remove everything SourceBox installed into games, restoring originals
+        try:
+            done = self._manifest().undo()
+            if done:
+                print("\n[cleanup] removing SourceBox files from games")
+                install_manifest.report(done)
+        except Exception as error:
+            print(f"[cleanup] failed: {error}")

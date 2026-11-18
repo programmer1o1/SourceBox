@@ -12,6 +12,7 @@ import psutil
 import traceback
 import random
 from sourcebox.bridges.source_discovery import SourceGameDiscoveryMixin
+from sourcebox import install_manifest
 from sourcebox.resources import load_text_resource
 from sourcebox.steam import (
     find_steam_from_process,
@@ -67,6 +68,35 @@ class SourceBridge(SourceGameDiscoveryMixin):
             'scriptdata': 'scriptdata',
             'cmdline_contains': 'Half-Life 1 Source Deathmatch'
         },
+        # newer VScript branches, handled by ModernVScriptBridge
+        'Left 4 Dead 2': {
+            'executables': ['left4dead2.exe', 'hl2_linux'],
+            'game_dir': 'left4dead2',
+            'scriptdata': 'ems',
+            'cmdline_contains': 'Left 4 Dead 2',
+            'vscript_branch': 'l4d2'
+        },
+        'Portal 2': {
+            'executables': ['portal2.exe', 'portal2_linux'],
+            'game_dir': 'portal2',
+            'scriptdata': 'scripts/vscripts',
+            'cmdline_contains': 'Portal 2',
+            'vscript_branch': 'portal2'
+        },
+        'Counter-Strike Global Offensive': {
+            'executables': ['csgo.exe', 'csgo_linux64'],
+            'game_dir': 'csgo',
+            'scriptdata': 'scripts/vscripts',
+            'cmdline_contains': 'Counter-Strike Global Offensive',
+            'vscript_branch': 'csgo'
+        },
+        'Alien Swarm': {
+            'executables': ['swarm.exe'],
+            'game_dir': 'swarm',
+            'scriptdata': 'scripts/vscripts',
+            'cmdline_contains': 'Alien Swarm',
+            'vscript_branch': 'swarm'
+        },
         'Garry\'s Mod 9': {
             'executables': ['hl2.exe', 'hl2_linux'],
             'game_dir': 'gmod9',
@@ -96,7 +126,7 @@ class SourceBridge(SourceGameDiscoveryMixin):
             'is_gmod': True
         },
         'Garry\'s Mod 13': {
-            'executables': ['hl2.exe', 'hl2_linux', 'gmod.exe', 'gmod', 'gmod64', 'gmod32', 'gmod_linux'],
+            'executables': ['hl2.exe', 'hl2_linux', 'gmod.exe', 'gmod', 'gmod64', 'gmod32', 'gmod_linux', 'gmod_win64.exe'],
             'game_dir': 'garrysmod',
             'scriptdata': 'data',
             'cmdline_contains': 'garrysmod',
@@ -121,6 +151,8 @@ class SourceBridge(SourceGameDiscoveryMixin):
         self.session_id = int(time.time() * 1000) + random.randint(0, 9999)
         self.gmod_bridge = None
         self.mapbase_bridge = None
+        self.modern_bridge = None
+        self._running_exe = None
 
         try:
             self._cleanup_old_files()
@@ -156,8 +188,8 @@ class SourceBridge(SourceGameDiscoveryMixin):
         for library_path in steam_libraries:
             for game_name, game_info in self.SUPPORTED_GAMES.items():
                 try:
-                    if game_info.get('is_gmod'):
-                        continue  # gmod cleanup handled by gmod bridge
+                    if game_info.get('is_gmod') or game_info.get('vscript_branch'):
+                        continue  # gmod and newer branches clean up their own files
 
                     game_root = os.path.join(library_path, 'steamapps', 'common', game_name)
                     if not os.path.exists(game_root):
@@ -207,8 +239,8 @@ class SourceBridge(SourceGameDiscoveryMixin):
             scriptdata_path = os.path.join(mod_path, 'scriptdata')
             cfg_path = os.path.join(mod_path, 'cfg')
 
-            os.makedirs(scriptdata_path, exist_ok=True)
-            os.makedirs(cfg_path, exist_ok=True)
+            install_manifest.make_dirs(scriptdata_path)
+            install_manifest.make_dirs(cfg_path)
 
             self.active_game = mod_name
             self.game_path = scriptdata_path
@@ -248,8 +280,7 @@ class SourceBridge(SourceGameDiscoveryMixin):
         output_file = os.path.join(self.vscripts_path, "python_listener.nut")
 
         try:
-            with open(output_file, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(vscript_code)
+            install_manifest.write_text(output_file, vscript_code, encoding='utf-8', newline='\n')
 
             print("\n[success] listener installed")
             print(f"  {output_file}")
@@ -275,8 +306,7 @@ class SourceBridge(SourceGameDiscoveryMixin):
         output_file = os.path.join(self.vscripts_path, "picker.nut")
 
         try:
-            with open(output_file, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(picker_code)
+            install_manifest.write_text(output_file, picker_code, encoding='utf-8', newline='\n')
 
             print("\n[success] picker installed")
             print(f"  {output_file}")
@@ -298,8 +328,7 @@ class SourceBridge(SourceGameDiscoveryMixin):
         output_file = os.path.join(self.vscripts_path, "awp_quit_trigger.nut")
 
         try:
-            with open(output_file, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(awp_quit_code)
+            install_manifest.write_text(output_file, awp_quit_code, encoding='utf-8', newline='\n')
 
             print("\n[success] awp quit trigger installed")
             print(f"  {output_file}")
@@ -313,7 +342,7 @@ class SourceBridge(SourceGameDiscoveryMixin):
 
     def reinstall_awp_outputs(self):
         """reinstall AWP damage outputs for newly spawned props"""
-        if not self.game_path or not self.command_file:
+        if not self.game_path or not self.command_file or self.modern_bridge:
             return False
 
         self.command_count += 1
@@ -324,6 +353,7 @@ class SourceBridge(SourceGameDiscoveryMixin):
         )
 
         try:
+            install_manifest.track(self.command_file)
             with open(self.command_file, 'w', encoding='ascii', newline='') as f:
                 f.write(command_json)
                 f.flush()
@@ -346,8 +376,7 @@ class SourceBridge(SourceGameDiscoveryMixin):
         output_file = os.path.join(self.vscripts_path, "auto_spawner.nut")
 
         try:
-            with open(output_file, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(auto_spawner_code)
+            install_manifest.write_text(output_file, auto_spawner_code, encoding='utf-8', newline='\n')
 
             print("\n[success] auto-spawner installed")
             print(f"  {output_file}")
@@ -416,8 +445,7 @@ class SourceBridge(SourceGameDiscoveryMixin):
     '''
 
         try:
-            with open(mapspawn_file, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(mapspawn_content)
+            install_manifest.write_text(mapspawn_file, mapspawn_content, encoding='utf-8', newline='\n', ours_marker='auto-load python bridge listener')
 
             print("\n[success] mapspawn configured")
             print(f"  {mapspawn_file}")
@@ -527,7 +555,14 @@ class SourceBridge(SourceGameDiscoveryMixin):
 
             print(f"\n[command #{self.command_count}] {model_path}")
 
+            if self.modern_bridge:
+                if self.modern_bridge.send_command(command_json):
+                    return True
+                print(f"  [error] could not write {self.command_file}")
+                return False
+
             try:
+                install_manifest.track(self.command_file)
                 with open(self.command_file, 'w', encoding='ascii', newline='') as f:
                     f.write(command_json)
                     f.flush()
@@ -675,6 +710,12 @@ class SourceBridge(SourceGameDiscoveryMixin):
                 self.gmod_bridge.cleanup()
             except:
                 pass
+
+        if self.modern_bridge:
+            # tell the in-game bridge to stop; the cleanup that follows then
+            # removes the command file without the game noticing it missing
+            self.modern_bridge.shutdown()
+            return
 
         try:
             files_to_cleanup = [self.command_file, self.response_file]

@@ -6,6 +6,12 @@ import traceback
 import psutil
 
 from mapbase_bridge import MapbaseBridge
+from sourcebox import install_manifest
+from sourcebox.bridges.modern_vscript import (
+    ModernVScriptBridge,
+    find_strata_game,
+    strata_shadowed_hooks,
+)
 from sourcebox.steam import command_mentions_executable, steam_library_from_process_info
 
 
@@ -172,6 +178,42 @@ class SourceGameDiscoveryMixin:
                 traceback.print_exc()
             return False
 
+    def _setup_modern_game(self, game_name, branch, mod_path, shadowed_hooks=()):
+        """setup a game on a newer VScript branch (L4D2, Portal 2, CS:GO, Swarm, Strata)"""
+        try:
+            bridge = ModernVScriptBridge(branch, mod_path, shadowed_hooks, verbose=self.verbose)
+            if not bridge.prepare_paths():
+                return False
+            bridge.install_scripts()
+
+            self.modern_bridge = bridge
+            self.active_game = game_name
+            self.game_path = bridge.data_path
+            self.vscripts_path = bridge.vscripts_path
+            self.command_file = bridge.command_file
+            self.response_file = bridge.response_file
+
+            print(f"\n[active] {game_name}")
+            print(f"  game path: {mod_path}")
+            print(f"  vscripts: {self.vscripts_path}")
+            print(f"  mode: {bridge.description}")
+            return True
+        except Exception as e:
+            print(f"[error] failed to setup {game_name}: {e}")
+            if self.verbose:
+                traceback.print_exc()
+            return False
+
+    def _game_root_candidates(self, game_name, steam_libraries):
+        """install folders to try for a game, the running executable's first"""
+        candidates = []
+        if getattr(self, '_running_exe', None):
+            candidates.append(os.path.dirname(os.path.abspath(self._running_exe)))
+        for library_path in steam_libraries:
+            for steamapps in ('steamapps', 'SteamApps'):
+                candidates.append(os.path.join(library_path, steamapps, 'common', game_name))
+        return candidates
+
     def _setup_mapbase_path(self, mod_name, steam_libraries):
         """try to locate and setup a mapbase-based mod by name"""
         for library_path in steam_libraries:
@@ -209,9 +251,12 @@ class SourceGameDiscoveryMixin:
         running_mod = None
         running_mod_path = None
         running_mapbase = False
+        running_strata = None
         gmod_executables = [
             'hl2.exe', 'hl2_linux', 'gmod.exe', 'gmod',
-            'gmod64', 'gmod32', 'gmod_linux'
+            'gmod64', 'gmod32', 'gmod_linux',
+            # 64-bit branch launcher, in the game root beside gmod.exe
+            'gmod_win64.exe'
         ]
 
         try:
@@ -297,6 +342,23 @@ class SourceGameDiscoveryMixin:
                                         if self._setup_gmod_path(running_game, self.SUPPORTED_GAMES[running_game], all_steam_libraries):
                                             return
                                     break
+                        else:
+                            # no -game: retail GMod launched straight from its own
+                            # folder (gmod.exe / gmod_win64.exe)
+                            exe_lower = (proc.info.get('exe') or '').lower().replace('\\', '/')
+                            if '/garrysmod/' in exe_lower and 'sourcemods' not in exe_lower:
+                                gmod13_info = self.SUPPORTED_GAMES.get('Garry\'s Mod 13')
+                                if gmod13_info and self._setup_gmod_path('Garry\'s Mod 13', gmod13_info, all_steam_libraries):
+                                    running_game = 'Garry\'s Mod 13'
+                                    print(f"  [found] {running_game}")
+                                    return
+
+                    # Strata Source games (P2CE, Portal: Revolution) by launcher layout
+                    strata = find_strata_game(proc.info.get('exe'), cmdline)
+                    if strata:
+                        running_strata = strata
+                        print(f"  [found] {strata[0]} (Strata Source)")
+                        break
 
                     # check for supported games
                     for game_name, game_info in self.SUPPORTED_GAMES.items():
@@ -312,6 +374,7 @@ class SourceGameDiscoveryMixin:
                             if game_info['cmdline_contains'].lower() in cmdline_str.lower() or \
                             game_info['game_dir'] in cmdline_str.lower():
                                 running_game = game_name
+                                self._running_exe = proc.info.get('exe')
                                 print(f"  [found] {game_name}")
                                 self._log(f"  process: {proc_name}")
                                 break
@@ -574,6 +637,12 @@ class SourceGameDiscoveryMixin:
         except Exception as e:
             print(f"[warning] process enumeration error: {e}")
 
+        if running_strata:
+            title, mod_path, root = running_strata
+            if self._setup_modern_game(title, 'strata', mod_path, strata_shadowed_hooks(root)):
+                return
+            print(f"[warning] found {title} but couldn't setup paths")
+
         if running_mod:
             # prefer mapbase setup when detected
             if running_mapbase or (running_mod_path and self._is_mapbase_path(running_mod_path)):
@@ -646,8 +715,8 @@ class SourceGameDiscoveryMixin:
                             if self._is_mapbase_path(mod_path):
                                 scriptdata_path = os.path.join(mod_path, 'scriptdata')
                                 vscripts_path = os.path.join(mod_path, 'scripts', 'vscripts')
-                                os.makedirs(scriptdata_path, exist_ok=True)
-                                os.makedirs(vscripts_path, exist_ok=True)
+                                install_manifest.make_dirs(scriptdata_path)
+                                install_manifest.make_dirs(vscripts_path)
 
                                 self.detected_games.append({
                                     'name': f"Mapbase: {mod_name}",
@@ -661,7 +730,7 @@ class SourceGameDiscoveryMixin:
                                 continue
 
                             scriptdata_path = os.path.join(mod_path, 'scriptdata')
-                            os.makedirs(scriptdata_path, exist_ok=True)
+                            install_manifest.make_dirs(scriptdata_path)
 
                             self.detected_games.append({
                                 'name': mod_name,
@@ -697,6 +766,13 @@ class SourceGameDiscoveryMixin:
         if game_info.get('is_gmod'):
             return self._setup_gmod_path(game_name, game_info, steam_libraries)
 
+        if game_info.get('vscript_branch'):
+            for game_root in self._game_root_candidates(game_name, steam_libraries):
+                mod_path = os.path.join(game_root, game_info['game_dir'])
+                if os.path.isfile(os.path.join(mod_path, 'gameinfo.txt')):
+                    return self._setup_modern_game(game_name, game_info['vscript_branch'], mod_path)
+            return False
+
         for library_path in steam_libraries:
             game_root = os.path.join(library_path, 'steamapps', 'common', game_name)
             if not os.path.exists(game_root):
@@ -707,8 +783,8 @@ class SourceGameDiscoveryMixin:
                     scriptdata_path = os.path.join(game_root, game_info['game_dir'], game_info['scriptdata'])
                     vscripts_path = os.path.join(game_root, game_info['game_dir'], 'scripts', 'vscripts')
 
-                    os.makedirs(scriptdata_path, exist_ok=True)
-                    os.makedirs(vscripts_path, exist_ok=True)
+                    install_manifest.make_dirs(scriptdata_path)
+                    install_manifest.make_dirs(vscripts_path)
 
                     self.active_game = game_name
                     self.game_path = scriptdata_path
@@ -774,7 +850,7 @@ class SourceGameDiscoveryMixin:
             if mod_path:
                 try:
                     data_path = os.path.join(mod_path, 'data')
-                    os.makedirs(data_path, exist_ok=True)
+                    install_manifest.make_dirs(data_path)
 
                     self.active_game = game_name
                     self.game_path = data_path
@@ -809,8 +885,8 @@ class SourceGameDiscoveryMixin:
         for library_path in steam_libraries:
             for game_name, game_info in self.SUPPORTED_GAMES.items():
                 try:
-                    if game_info.get('is_gmod'):
-                        continue  # gmod handled by lua bridge when running
+                    if game_info.get('is_gmod') or game_info.get('vscript_branch'):
+                        continue  # gmod and newer branches are only set up while running
 
                     game_root = os.path.join(library_path, 'steamapps', 'common', game_name)
                     if not os.path.exists(game_root):
@@ -826,8 +902,8 @@ class SourceGameDiscoveryMixin:
                             scriptdata_path = os.path.join(game_dir_path, 'vscript_io')
                             vscripts_path = os.path.join(game_dir_path, 'scripts', 'vscripts')
 
-                            os.makedirs(scriptdata_path, exist_ok=True)
-                            os.makedirs(vscripts_path, exist_ok=True)
+                            install_manifest.make_dirs(scriptdata_path)
+                            install_manifest.make_dirs(vscripts_path)
 
                             self.detected_games.append({
                                 'name': f"Mapbase: {game_name}",
@@ -843,8 +919,8 @@ class SourceGameDiscoveryMixin:
                             scriptdata_path = os.path.join(game_root, game_info['game_dir'], game_info['scriptdata'])
                             vscripts_path = os.path.join(game_root, game_info['game_dir'], 'scripts', 'vscripts')
 
-                            os.makedirs(scriptdata_path, exist_ok=True)
-                            os.makedirs(vscripts_path, exist_ok=True)
+                            install_manifest.make_dirs(scriptdata_path)
+                            install_manifest.make_dirs(vscripts_path)
 
                             self.detected_games.append({
                                 'name': game_name,

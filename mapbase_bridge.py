@@ -7,6 +7,7 @@ features can be dropped in automatically.
 import os
 
 from sourcebox.resources import load_text_resource
+from sourcebox import install_manifest
 
 
 class MapbaseBridge:
@@ -21,8 +22,8 @@ class MapbaseBridge:
     def prepare_paths(self):
         """create required folders for VScript bridge files"""
         try:
-            os.makedirs(self.scriptdata_path, exist_ok=True)
-            os.makedirs(self.vscripts_path, exist_ok=True)
+            install_manifest.make_dirs(self.scriptdata_path)
+            install_manifest.make_dirs(self.vscripts_path)
             return True
         except Exception as e:
             if self.verbose:
@@ -41,8 +42,7 @@ class MapbaseBridge:
         for filename, content in scripts.items():
             dest = os.path.join(self.vscripts_path, filename)
             try:
-                with open(dest, "w", encoding="utf-8", newline="\n") as f:
-                    f.write(content)
+                install_manifest.write_text(dest, content, encoding="utf-8", newline="\n")
                 if self.verbose:
                     print(f"[installed] {filename}")
             except Exception as e:

@@ -61,6 +61,21 @@ An application with Source Engine integration through VScript and Garry's Mod Lu
 > [!NOTE]
 > Mapbase mods are automatically detected whether they're standalone games or sourcemods. The system checks for a `mapbase` folder in the game directory.
 
+### Newer VScript Branches (Experimental)
+| Game | VScript Bridge | Auto-Spawn | Picker | Notes |
+|------|----------------|------------|--------|-------|
+| Left 4 Dead 2 | ✅ | ✅ | ❌ | Commands through `left4dead2/ems/` |
+| Portal 2 | ✅ | ✅ | ❌ | Keeps the game's own `mapspawn.nut` running |
+| Portal 2: Community Edition | ✅ | ✅ | ❌ | Strata Source, auto-detected |
+| Portal: Revolution | ✅ | ✅ | ❌ | Strata Source, auto-detected |
+| Counter-Strike: Global Offensive | ✅ | ✅ | ❌ | Legacy CS:GO (`csgo.exe`), not CS2 |
+| Alien Swarm | ✅ | ✅ | ❌ | Top-down: spawns in front of the first marine |
+
+> [!NOTE]
+> These games only set up while they are running, and the bridge starts on the next map load. They are untested in-game so far.
+> Portal 2, CS:GO, Alien Swarm and Strata can't read files from scripts, so SourceBox sends each command as a tiny script (`sourcebox_command.nut`) that the game re-runs, and spawn results show in the game console.
+> The cube model must be installed for the game (see the note at the top), otherwise the cube spawns as an error model.
+
 ### Garry's Mod Support (Lua Bridge)
 | Version | Lua Bridge | Picker | Auto-Spawn | Notes |
 |---------|------------|--------|------------|-------|
@@ -68,7 +83,7 @@ An application with Source Engine integration through VScript and Garry's Mod Lu
 | GMod 10 | ✅ | ✅ | ✅ | Sourcemod |
 | GMod 11 | ✅ | ✅ | ✅ | Sourcemod |
 | GMod 12 | ✅ | ✅ | ✅ | Sourcemod |
-| GMod 13 | ✅ | ✅ | ✅ | Retail install |
+| GMod 13 | ✅ | ✅ | ✅ | Retail install, 32-bit or 64-bit (`gmod_win64.exe`) |
 
 ### Console Injection (Legacy Support - Windows Only)
 - Works with any Source mod without VScript support or Lua support
@@ -367,6 +382,13 @@ sourcebox_spawn props/yourmod/model.mdl 300
 - **Format**: JSON with session ID and command counter
 - **Rate**: Commands checked every 100ms
 
+### Automatic Cleanup
+- **What**: Everything SourceBox installs into a game (scripts, addon folders, command files) is removed when SourceBox closes, and any game file it replaced, such as Portal 2's `mapspawn.nut`, is restored
+- **Killed or crashed**: A small background copy of SourceBox waits for it to exit and cleans up even after "End process" in Task Manager; anything still left is cleaned at the next start
+- **Record**: `installed.json` (plus `backups/`) in SourceBox's log folder
+- **Edited files**: A file you changed after SourceBox wrote it is left in place
+- **In-game**: On the newer VScript branches the bridge stops polling as soon as its command file is gone, so closing SourceBox mid-map causes no console spam
+
 ### Demo Detection (PULL Mode)
 - **Method**: A hidden worker process (SourceBox relaunched with `--demo-scan-worker`) checks Source game processes, found by their `steamapps` path plus `wineserver`, for open `.dem` files with `psutil` about once a second
 - **Why a separate process**: `psutil` holds Python's global lock while listing open files, which would freeze rendering if it ran inside the app
@@ -380,6 +402,15 @@ sourcebox_spawn props/yourmod/model.mdl 300
 - **Format**: JSON with session ID and command counter
 - **Rate**: Commands checked every 100ms
 - **Detection**: Automatic via `mapbase/` folder presence
+
+### Newer Branch VScript Communication
+- **Games**: Left 4 Dead 2, Portal 2, CS:GO, Alien Swarm, Strata Source (P2CE, Portal: Revolution)
+- **Script**: one shared `sourcebox_bridge.nut`, loaded from `mapspawn.nut` (`mapspawn_addon.nut` on L4D2)
+- **L4D2**: JSON in `ems/sourcebox_command.txt`, results in `ems/sourcebox_response.txt`
+- **Others**: JSON wrapped in `scripts/vscripts/sourcebox_command.nut`, re-run with `DoIncludeScript`; results print to the game console
+- **Existing hooks**: a game's own `mapspawn.nut` is kept as `sourcebox_original_mapspawn.nut` and still runs first
+- **Detection**: Strata games are recognised by `scriptsystem.dll` beside the launcher in `bin/win64`
+- **Rate**: Commands checked every 100ms
 
 ### Lua Communication (GMod)
 - **Method**: File I/O via `data/` folder

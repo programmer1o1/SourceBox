@@ -9,6 +9,14 @@ if "--demo-scan-worker" in sys.argv:
     run_scan_worker(int(sys.argv[sys.argv.index(WORKER_FLAG) + 1]), sys.stdout)
     sys.exit(0)
 
+# The cleanup guard is also this program relaunched: it waits for SourceBox to
+# exit, however it exits, then removes the files SourceBox installed into games.
+if "--cleanup-guard" in sys.argv:
+    from sourcebox.install_manifest import GUARD_FLAG, run_cleanup_guard
+
+    run_cleanup_guard(int(sys.argv[sys.argv.index(GUARD_FLAG) + 1]))
+    sys.exit(0)
+
 import pygame
 import os
 import sys
@@ -26,8 +34,19 @@ from sourcebox.bridges import BridgeManager
 from sourcebox.cursor import CursorRenderer
 from sourcebox.demo_watcher import DemoWatcher
 from sourcebox.diagnostics import configure_runtime_diagnostics
+from sourcebox.install_manifest import start_cleanup_guard
 from sourcebox.raycast import RayCaster
-from sourcebox.rendering.main_scene import Camera, Checkerboard, Light, Object3D
+from sourcebox.rendering.antialias import MultisampleTarget
+from sourcebox.rendering.picking import pick
+from sourcebox.rendering.main_scene import (
+    Camera,
+    Checkerboard,
+    Light,
+    Object3D,
+    SPIN_COLOR,
+    apply_main_projection,
+    draw_sphere_shadow,
+)
 from sourcebox.resources import find_resource
 from sourcebox.scenes.missing_texture import MissingTextureScene
 
@@ -78,6 +97,35 @@ def get_display_scale(display_width, display_height):
     scale = min(width_scale, height_scale)
 
     return scale
+
+MULTISAMPLE_SAMPLES = 4
+
+# every frame is drawn here and shown with frame_target.present()
+frame_target = MultisampleTarget(MULTISAMPLE_SAMPLES)
+
+def set_display_mode(size, flags=DOUBLEBUF | OPENGL):
+    """Open the OpenGL window with multisample anti-aliasing.
+
+    Asks for a multisampled window first; if the driver refuses or silently
+    ignores that, frame_target draws through an offscreen multisampled buffer
+    instead. Call this for every mode change so the buffer follows the size.
+    """
+    try:
+        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
+        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, MULTISAMPLE_SAMPLES)
+        screen = pygame.display.set_mode(size, flags)
+    except pygame.error as error:
+        print(f"Anti-aliasing unavailable ({error}), continuing without it")
+        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 0)
+        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 0)
+        screen = pygame.display.set_mode(size, flags)
+
+    frame_target.setup(size)
+    try:
+        glEnable(GL_MULTISAMPLE)
+    except Exception:
+        pass
+    return screen
 
 def init_pygame():
     try:
@@ -148,7 +196,7 @@ def init_pygame():
 
         flags = DOUBLEBUF | OPENGL
 
-        screen = pygame.display.set_mode(display, flags)
+        screen = set_display_mode(display, flags)
         pygame.display.set_caption('SourceBox')
 
         glEnable(GL_DEPTH_TEST)
@@ -166,7 +214,7 @@ def init_pygame():
 
         glMatrixMode(GL_PROJECTION)
         aspect_ratio = display[0] / display[1]
-        gluPerspective(53.25, aspect_ratio, 0.1, 50.0)
+        apply_main_projection(aspect_ratio)
         glMatrixMode(GL_MODELVIEW)
 
         glClearColor(0.0, 0.0, 0.0, 1.0)
@@ -232,15 +280,22 @@ def draw_object(obj):
     glScalef(sx, sy, sz)
 
     if obj.is_rotating:
-        glColor3f(0.0, 0.9, 1.0)
+        glColor3f(*SPIN_COLOR)
     elif obj.is_hovered:
         glColor3f(0.8, 0.0, 0.0)
     else:
-        brightness_map = {"cube": 0.6, "sphere": 0.7, "cone": 0.65}
-        b = brightness_map.get(obj.type, 0.6) * obj.brightness
+        b = obj.shade()
         glColor3f(b, b, b)
 
+    if obj.is_rotating:
+        # the spinning cube leaves no depth, so objects drawn after it (the
+        # sphere) always show in front of it, as in the reference
+        glDepthMask(GL_FALSE)
+
     glCallList(obj.display_list)
+
+    if obj.is_rotating:
+        glDepthMask(GL_TRUE)
 
     if lighting_disabled:
         glEnable(GL_LIGHTING)
@@ -251,7 +306,8 @@ def update_object_rotation(obj, dt):
     if dt > 0 and dt <= 1.0 and obj.is_rotating:
         obj.rotation_angle = (obj.rotation_angle + 45.0 * dt) % 360.0
 
-def check_object_hover(mouse_pos, ray_caster, objects, sound_manager):
+def _pick_object(mouse_pos, ray_caster, objects, include_rotating=True):
+    """Return the object under the mouse, testing each shape exactly."""
     if not objects:
         return None
 
@@ -261,22 +317,18 @@ def check_object_hover(mouse_pos, ray_caster, objects, sound_manager):
     if ray_origin is None or ray_dir is None:
         return None
 
-    hovered_obj = None
-    min_distance = float('inf')
+    candidates = [
+        (obj, obj.type, obj.model_matrix(), obj.is_rotating)
+        for obj in objects
+        if include_rotating or not obj.is_rotating
+    ]
+    return pick(candidates, ray_origin, ray_dir)
 
-    for obj in objects:
-        if obj.is_rotating:
-            continue
+def check_object_hover(mouse_pos, ray_caster, objects, sound_manager):
+    if not objects:
+        return None
 
-        if ray_caster.ray_sphere_intersection(ray_origin, ray_dir, obj.position, obj.bounding_radius):
-            dx = obj.position[0] - ray_origin[0]
-            dy = obj.position[1] - ray_origin[1]
-            dz = obj.position[2] - ray_origin[2]
-            distance = dx*dx + dy*dy + dz*dz
-
-            if distance < min_distance:
-                min_distance = distance
-                hovered_obj = obj
+    hovered_obj = _pick_object(mouse_pos, ray_caster, objects, include_rotating=False)
 
     for obj in objects:
         new_hover_state = (obj == hovered_obj)
@@ -287,30 +339,7 @@ def check_object_hover(mouse_pos, ray_caster, objects, sound_manager):
     return hovered_obj
 
 def check_object_click(mouse_pos, ray_caster, objects):
-    if not objects:
-        return None
-
-    mouse_x, mouse_y = mouse_pos
-    ray_origin, ray_dir = ray_caster.get_ray_from_mouse(mouse_x, mouse_y)
-
-    if ray_origin is None or ray_dir is None:
-        return None
-
-    clicked_obj = None
-    min_distance = float('inf')
-
-    for obj in objects:
-        if ray_caster.ray_sphere_intersection(ray_origin, ray_dir, obj.position, obj.bounding_radius):
-            dx = obj.position[0] - ray_origin[0]
-            dy = obj.position[1] - ray_origin[1]
-            dz = obj.position[2] - ray_origin[2]
-            distance = dx*dx + dy*dy + dz*dz
-
-            if distance < min_distance:
-                min_distance = distance
-                clicked_obj = obj
-
-    return clicked_obj
+    return _pick_object(mouse_pos, ray_caster, objects)
 
 def main():
     configure_runtime_diagnostics()
@@ -334,6 +363,9 @@ def main():
     # when song restarts, it will start 2 sec later so lol
     sound_manager.play_music(loops=-1, volume=0.3)
 
+    # before anything is installed, so even a killed SourceBox gets cleaned up
+    start_cleanup_guard(os.path.abspath(__file__))
+
     bridge_manager = BridgeManager(
         SourceBridge if BRIDGE_AVAILABLE else None,
         GModBridge if GMOD_BRIDGE_AVAILABLE else None,
@@ -349,23 +381,23 @@ def main():
 
     objects = [
         Object3D("cube",
-                 position=[-1.21, 2.11, -1.14],
-                 rotation=[1467.99, -1441.71, 27.87],
-                 scale=1.22,
-                 scale_xyz=[1.09, 0.99, 1.04],
-                 brightness=0.7),
+                 position=[0.0, 2.059, 0.0],
+                 rotation=[-63.63, -41.49, 9.39],
+                 scale=1.306,
+                 scale_xyz=[1.0, 1.0, 1.0],
+                 brightness=0.796),
         Object3D("sphere",
-                 position=[0.03, 2.68, -1.03],
-                 rotation=[-269.60, -18.40, 0.00],
-                 scale=1.69,
-                 scale_xyz=[0.96, 0.97, 0.98],
-                 brightness=0.7),
+                 position=[1.274, 2.684, -0.035],
+                 rotation=[0.0, 0.0, 0.0],
+                 scale=1.746,
+                 scale_xyz=[1.0, 1.0, 1.0],
+                 brightness=0.712),
         Object3D("cone",
-                 position=[6.29, 2.49, 1.49],
-                 rotation=[157.67, 19.35, 335.96],
-                 scale=1.06,
-                 scale_xyz=[0.73, 1.51, 1.11],
-                 brightness=0.7)
+                 position=[5.691, 5.717, 1.575],
+                 rotation=[156.62, 7.95, 160.26],
+                 scale=1.0,
+                 scale_xyz=[1.0, 1.0, 0.99],
+                 brightness=0.774)
     ]
 
     camera = Camera()
@@ -464,14 +496,16 @@ def main():
                                                 glCallList(o.display_list)
                                                 glEnable(GL_LIGHTING)
                                             else:
-                                                b = 0.65 * o.brightness
+                                                b = o.shade()
                                                 glColor3f(b, b, b)
                                                 glCallList(o.display_list)
                                             glPopMatrix()
                                         else:
                                             draw_object(o)
+                                    draw_sphere_shadow(objects, light)
+                                    light.release()
                                     cursor_renderer.draw(mouse_pos, display[0], display[1])
-                                    pygame.display.flip()
+                                    frame_target.present()
                                     pygame.time.wait(80)
 
                                 cone_duration = sound_manager.get_sound_duration('cone_click')
@@ -491,7 +525,7 @@ def main():
 
                                 os.environ['SDL_VIDEO_WINDOW_POS'] = f"{(screen_width - new_width) // 2},{(screen_height - new_height) // 2}"
 
-                                pygame.display.set_mode((new_width, new_height), DOUBLEBUF | OPENGL)
+                                set_display_mode((new_width, new_height))
                                 display = (new_width, new_height)
 
                                 glViewport(0, 0, new_width, new_height)
@@ -510,10 +544,8 @@ def main():
                                 else:
                                     clicked_obj.rotation_angle = 0.0
                                     clicked_obj.is_rotating = True
-                                    clicked_obj.position = [-0.69, 1.43, -1.61]
-                                    clicked_obj.base_rotation = [1422.99, -1461.21, 24.37]
-                                    clicked_obj.scale = 1.22
-                                    clicked_obj.scale_xyz = [1.15, 1.19, 1.19]
+                                    clicked_obj.position = [0.151, 2.675, -0.66]
+                                    clicked_obj.base_rotation = [-15.3, -22.34, -95.37]
 
                         elif current_scene == "cone":
                             # check triangle click in cone scene (LEFT-CLICK ONLY)
@@ -530,7 +562,7 @@ def main():
                                     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
                                     cone_scene.draw(display[0], display[1])
                                     cursor_renderer.draw(mouse_pos, display[0], display[1])
-                                    pygame.display.flip()
+                                    frame_target.present()
                                     pygame.time.wait(80)
                                 cone_scene.triangle_flash_red = False
 
@@ -552,7 +584,7 @@ def main():
                                 # center the window with original size
                                 os.environ['SDL_VIDEO_WINDOW_POS'] = f"{(screen_width - original_display[0]) // 2},{(screen_height - original_display[1]) // 2}"
 
-                                pygame.display.set_mode(original_display, DOUBLEBUF | OPENGL)
+                                set_display_mode(original_display)
                                 display = original_display
 
                                 # restore OpenGL viewport and perspective
@@ -561,7 +593,7 @@ def main():
                                 glMatrixMode(GL_PROJECTION)
                                 glLoadIdentity()
                                 aspect_ratio = display[0] / display[1]
-                                gluPerspective(53.25, aspect_ratio, 0.1, 50.0)
+                                apply_main_projection(aspect_ratio)
                                 glMatrixMode(GL_MODELVIEW)
 
                                 # restore cursor
@@ -593,6 +625,9 @@ def main():
                 for obj in objects:
                     draw_object(obj)
 
+                draw_sphere_shadow(objects, light)
+                light.release()
+
                 cursor_renderer.draw(mouse_pos, display[0], display[1])
 
             elif current_scene == "error":
@@ -605,7 +640,7 @@ def main():
                 cone_scene.draw(display[0], display[1])
                 cursor_renderer.draw(mouse_pos, display[0], display[1])
 
-            pygame.display.flip()
+            frame_target.present()
 
             frame_count += 1
             if time.time() - fps_timer >= 1.0:
@@ -626,6 +661,7 @@ def main():
         sound_manager.stop_music()
 
         board.cleanup()
+        frame_target.cleanup()
         for obj in objects:
             obj.cleanup()
         missing_texture_scene.cleanup()

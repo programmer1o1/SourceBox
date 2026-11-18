@@ -4,6 +4,36 @@ import math
 
 from OpenGL.GL import *
 from OpenGL.GLU import *
+
+from sourcebox.rendering.shadows import model_matrix, sphere_shadow_on_cube
+
+# The menu is matched to a reference render that used a long lens, so its
+# projection differs from the other scenes.
+MAIN_FOV = 16.35
+MAIN_NEAR = 1.0
+MAIN_FAR = 200.0
+
+# World space is laid out on the board: Y is height above the checkerboard and
+# the cube sits over the origin. These values were fitted to the reference image.
+CAMERA_POSITION = [-1.508, 0.382, -29.669]
+CAMERA_ROTATION = [94.79, -13.46, -24.64]
+LIGHT_DIRECTION = [0.338, 0.164, -0.927, 0.0]
+LIGHT_DIFFUSE = 0.696
+
+# OpenGL's default scene ambient; added to the light's own ambient term.
+GLOBAL_AMBIENT = 0.2
+
+BASE_BRIGHTNESS = {"cube": 0.6, "sphere": 0.7, "cone": 0.65}
+
+# Flat colour of the cube while it spins after being clicked.
+SPIN_COLOR = (0.376, 0.878, 0.949)
+
+
+def apply_main_projection(aspect_ratio):
+    """Set the main-menu perspective on the current (projection) matrix."""
+    gluPerspective(MAIN_FOV, aspect_ratio, MAIN_NEAR, MAIN_FAR)
+
+
 class Object3D:
     def __init__(self, obj_type, position=(0, 0, 0), rotation=(0, 0, 0), scale=1.0, scale_xyz=[1.0, 1.0, 1.0], brightness=0.6):
         self.type = obj_type
@@ -34,6 +64,16 @@ class Object3D:
             self.bounding_radius = 0.6 * self.scale * max(self.scale_xyz)
         else:
             self.bounding_radius = 0.5 * self.scale * max(self.scale_xyz)
+
+    def shade(self):
+        """Grey level the object is drawn with before lighting."""
+        return BASE_BRIGHTNESS.get(self.type, 0.6) * self.brightness
+
+    def model_matrix(self):
+        """Current model transform, matching what draw_object() applies."""
+        scale = [self.scale * s for s in self.scale_xyz]
+        spin = self.rotation_angle if self.is_rotating else 0.0
+        return model_matrix(self.position, self.base_rotation, scale, spin)
 
     def create_display_list(self):
         if self.display_list is not None:
@@ -131,9 +171,9 @@ class Object3D:
 
 class Camera:
     def __init__(self):
-        self.position = [0.0, -1.0, -10.0]
-        self.rotation = [92.97, -9.00, -10.38]
-        self.fov = max(1.0, min(179.0, 53.25))
+        self.position = list(CAMERA_POSITION)
+        self.rotation = list(CAMERA_ROTATION)
+        self.fov = MAIN_FOV
         self.matrices_dirty = True
 
     def apply(self):
@@ -144,30 +184,109 @@ class Camera:
         glRotatef(self.rotation[2], 0, 0, 1)
 
 class Light:
+    """Main-menu key light.
+
+    The menu owns GL_LIGHT1. GL_LIGHT0 is left exactly as the menu has always
+    left it (position included), because the Voidside scene's grey cones are lit
+    by whatever GL_LIGHT0 state they inherit.
+    """
+
+    # GL_LIGHT0 as inherited by Voidside: do not retune.
+    SHARED_POSITION = [107.10, 2.85, -185.15, 1.0]
+    SHARED_CAMERA_POSITION = [0.0, -1.0, -10.0]
+    SHARED_CAMERA_ROTATION = [92.97, -9.00, -10.38]
+    SHARED_AMBIENT = [0.1, 0.1, 0.1, 1.0]
+    SHARED_DIFFUSE = [1.0, 1.0, 1.0, 1.0]
+    SHARED_SPECULAR = [1.0, 1.0, 1.0, 1.0]
+
     def __init__(self):
-        self.position = [107.10, 2.85, -185.15, 1.0]
+        # w = 0: directional, pointing from the scene towards the light
+        self.position = list(LIGHT_DIRECTION)
         self.ambient = [0.1, 0.1, 0.1, 1.0]
-        self.diffuse = [1.0, 1.0, 1.0, 1.0]
-        self.specular = [1.0, 1.0, 1.0, 1.0]
+        self.diffuse = [LIGHT_DIFFUSE, LIGHT_DIFFUSE, LIGHT_DIFFUSE, 1.0]
+        self.specular = [0.0, 0.0, 0.0, 1.0]
         self.setup_done = False
 
+    def ambient_level(self):
+        """Fraction of an object's colour that survives with no direct light."""
+        return self.ambient[0] + GLOBAL_AMBIENT
+
     def apply(self):
+        """Light the menu; call with the menu camera applied, then release()."""
         if not self.setup_done:
-            glLightfv(GL_LIGHT0, GL_AMBIENT, self.ambient)
-            glLightfv(GL_LIGHT0, GL_DIFFUSE, self.diffuse)
-            glLightfv(GL_LIGHT0, GL_SPECULAR, self.specular)
+            glLightfv(GL_LIGHT0, GL_AMBIENT, self.SHARED_AMBIENT)
+            glLightfv(GL_LIGHT0, GL_DIFFUSE, self.SHARED_DIFFUSE)
+            glLightfv(GL_LIGHT0, GL_SPECULAR, self.SHARED_SPECULAR)
             self.setup_done = True
-        glLightfv(GL_LIGHT0, GL_POSITION, self.position)
+
+        glPushMatrix()
+        glLoadIdentity()
+        glTranslatef(*self.SHARED_CAMERA_POSITION)
+        glRotatef(self.SHARED_CAMERA_ROTATION[0], 1, 0, 0)
+        glRotatef(self.SHARED_CAMERA_ROTATION[1], 0, 1, 0)
+        glRotatef(self.SHARED_CAMERA_ROTATION[2], 0, 0, 1)
+        glLightfv(GL_LIGHT0, GL_POSITION, self.SHARED_POSITION)
+        glPopMatrix()
+
+        glLightfv(GL_LIGHT1, GL_AMBIENT, self.ambient)
+        glLightfv(GL_LIGHT1, GL_DIFFUSE, self.diffuse)
+        glLightfv(GL_LIGHT1, GL_SPECULAR, self.specular)
+        glLightfv(GL_LIGHT1, GL_POSITION, self.position)
+        glDisable(GL_LIGHT0)
+        glEnable(GL_LIGHT1)
+
+    def release(self):
+        """Hand lighting back to GL_LIGHT0 for the other scenes."""
+        glDisable(GL_LIGHT1)
+        glEnable(GL_LIGHT0)
+
+
+def draw_sphere_shadow(objects, light):
+    """Darken the part of the cube that sits in the sphere's shadow."""
+    cube = next((o for o in objects if o.type == "cube"), None)
+    sphere = next((o for o in objects if o.type == "sphere"), None)
+    if cube is None or sphere is None:
+        return
+    if cube.is_hovered or cube.is_rotating:
+        # highlighted objects are drawn unlit, so they show no shadow
+        return
+
+    polygons = sphere_shadow_on_cube(light.position, sphere.model_matrix(), cube.model_matrix())
+    if not polygons:
+        return
+
+    shade = cube.shade() * light.ambient_level()
+
+    glPushMatrix()
+    glMultMatrixf([value for column in zip(*cube.model_matrix()) for value in column])
+    glDisable(GL_LIGHTING)
+    glEnable(GL_POLYGON_OFFSET_FILL)
+    glPolygonOffset(-1.0, -1.0)
+    glDepthMask(GL_FALSE)
+    glColor3f(shade, shade, shade)
+    for _normal, points in polygons:
+        glBegin(GL_POLYGON)
+        for point in points:
+            glVertex3f(*point)
+        glEnd()
+    glDepthMask(GL_TRUE)
+    glDisable(GL_POLYGON_OFFSET_FILL)
+    glEnable(GL_LIGHTING)
+    glPopMatrix()
+
 
 class Checkerboard:
     def __init__(self):
-        self.size = 30
-        self.position = [-25.87, 0.53, 6.68]
+        # 32 tiles across a 1024px texture: whole texels per tile keeps edges exact
+        self.size = 16
+        self.position = [-0.168, 0.0, 0.804]
         self.rotation = [0, 0, 0]
-        self.scale = [1.55, 0.63, 1.22]
-        self.dark_color = [0.2, 0.2, 0.2]
+        self.scale = [1.574, 1.0, 1.169]
+        self.dark_color = [0.147, 0.147, 0.147]
         self.light_color = [0.0, 0.0, 0.0]
         self.brightness = 2
+        # 0 = crisp tile edges, 1 = fully box-blurred; matched to the reference
+        self.edge_blur = 0.53
         self.display_list = None
         self.texture = None
 
@@ -253,7 +372,7 @@ class Checkerboard:
                     data[idx + 1] = val
                     data[idx + 2] = val
 
-            # gentle blur: blend 20% blurred with 80% sharp
+            # soften tile edges: blend the sharp texture with a 3x3 box blur
             sharp = bytes(data)
             blurred = bytearray(tex_size * tex_size * 3)
             radius = 1
@@ -270,7 +389,7 @@ class Checkerboard:
                     idx = (y * tex_size + x) * 3
                     blur_val = r_sum // count
                     sharp_val = sharp[idx]
-                    val = int(sharp_val * 0.9 + blur_val * 0.1)
+                    val = int(sharp_val * (1.0 - self.edge_blur) + blur_val * self.edge_blur)
                     blurred[idx] = val
                     blurred[idx + 1] = val
                     blurred[idx + 2] = val

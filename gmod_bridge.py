@@ -9,6 +9,7 @@ import time
 import psutil
 
 from sourcebox.resources import load_text_resource
+from sourcebox import install_manifest
 from sourcebox.steam import (
     command_mentions_executable,
     find_steam_from_process,
@@ -119,7 +120,7 @@ class GModBridge:
                         else:
                             addon_path = os.path.join(mod_path, 'addons', 'sourcebox')
 
-                        os.makedirs(data_path, exist_ok=True)
+                        install_manifest.make_dirs(data_path)
 
                         if running_gmod and running_gmod == mod_folder:
                             self._setup_paths(data_path, addon_path, mod_name, is_gmod9, mod_folder)
@@ -138,7 +139,7 @@ class GModBridge:
 
             data_path = os.path.join(retail_path, 'data')
             addon_path = os.path.join(retail_path, 'addons', 'sourcebox')
-            os.makedirs(data_path, exist_ok=True)
+            install_manifest.make_dirs(data_path)
 
             if running_gmod in ['gmod13', 'garrysmod']:
                 self._setup_paths(data_path, addon_path, self.GMOD_RETAIL['gmod13']['name'], False, 'gmod13')
@@ -153,7 +154,9 @@ class GModBridge:
         """detect running gmod"""
         gmod_executables = [
             'hl2.exe', 'hl2_linux', 'gmod.exe', 'gmod',
-            'gmod64', 'gmod32', 'gmod_linux'
+            'gmod64', 'gmod32', 'gmod_linux',
+            # 64-bit branch launcher, in the game root beside gmod.exe
+            'gmod_win64.exe'
         ]
         try:
             for proc in psutil.process_iter(['name', 'exe', 'cmdline']):
@@ -209,7 +212,9 @@ class GModBridge:
         """find the steam library root that holds the running gmod executable"""
         gmod_executables = [
             'hl2.exe', 'hl2_linux', 'gmod.exe', 'gmod',
-            'gmod64', 'gmod32', 'gmod_linux'
+            'gmod64', 'gmod32', 'gmod_linux',
+            # 64-bit branch launcher, in the game root beside gmod.exe
+            'gmod_win64.exe'
         ]
         try:
             for proc in psutil.process_iter(['name', 'exe', 'cmdline']):
@@ -273,22 +278,19 @@ class GModBridge:
         try:
             if self.is_gmod9:
                 # gmod 9 uses init folder structure
-                os.makedirs(self.addon_path, exist_ok=True)
+                install_manifest.make_dirs(self.addon_path)
 
                 # write picker script
                 picker_content = self._get_gmod9_picker_lua()
-                with open(os.path.join(self.addon_path, 'sv_picker_gmod9.lua'), 'w') as f:
-                    f.write(picker_content)
+                install_manifest.write_text(os.path.join(self.addon_path, 'sv_picker_gmod9.lua'), picker_content)
 
                 # write spawner script
                 spawner_content = self._get_gmod9_spawner_lua()
-                with open(os.path.join(self.addon_path, 'sv_auto_spawner_gmod9.lua'), 'w') as f:
-                    f.write(spawner_content)
+                install_manifest.write_text(os.path.join(self.addon_path, 'sv_auto_spawner_gmod9.lua'), spawner_content)
 
                 # write bridge script
                 bridge_content = self._get_gmod9_bridge_lua()
-                with open(os.path.join(self.addon_path, 'sv_python_listener_gmod9.lua'), 'w') as f:
-                    f.write(bridge_content)
+                install_manifest.write_text(os.path.join(self.addon_path, 'sv_python_listener_gmod9.lua'), bridge_content)
 
                 print(f"  [created] {self.addon_path}")
                 print("  [files] sv_picker_gmod9.lua, sv_auto_spawner_gmod9.lua, sv_python_listener_gmod9.lua")
@@ -300,7 +302,7 @@ class GModBridge:
                 autorun_path = os.path.join(lua_path, 'autorun')
                 sourcebox_path = os.path.join(autorun_path, 'sourcebox')
 
-                os.makedirs(sourcebox_path, exist_ok=True)
+                install_manifest.make_dirs(sourcebox_path)
                 # write addon metadata
                 if self.gmod_version == 'gmod13':
                     addon_content = '''"AddonInfo"
@@ -312,8 +314,7 @@ class GModBridge:
 	"override"	"0"
 }
 '''
-                    with open(os.path.join(self.addon_path, 'addon.txt'), 'w') as f:
-                        f.write(addon_content)
+                    install_manifest.write_text(os.path.join(self.addon_path, 'addon.txt'), addon_content)
                 else:
                     info_content = '''sourcebox
 {
@@ -323,28 +324,23 @@ class GModBridge:
 	info		"Python bridge for Garry's Mod"
 }
 '''
-                    with open(os.path.join(self.addon_path, 'info.txt'), 'w') as f:
-                        f.write(info_content)
+                    install_manifest.write_text(os.path.join(self.addon_path, 'info.txt'), info_content)
 
                 # write sourcebox_init.lua
                 init_content = self._get_init_lua()
-                with open(os.path.join(autorun_path, 'sourcebox_init.lua'), 'w') as f:
-                    f.write(init_content)
+                install_manifest.write_text(os.path.join(autorun_path, 'sourcebox_init.lua'), init_content)
 
                 # write sv_python_bridge.lua
                 bridge_content = self._get_bridge_lua()
-                with open(os.path.join(sourcebox_path, 'sv_python_bridge.lua'), 'w') as f:
-                    f.write(bridge_content)
+                install_manifest.write_text(os.path.join(sourcebox_path, 'sv_python_bridge.lua'), bridge_content)
 
                 # write sv_picker.lua
                 picker_content = self._get_picker_lua()
-                with open(os.path.join(sourcebox_path, 'sv_picker.lua'), 'w') as f:
-                    f.write(picker_content)
+                install_manifest.write_text(os.path.join(sourcebox_path, 'sv_picker.lua'), picker_content)
 
                 # write sv_auto_spawner.lua
                 spawner_content = self._get_spawner_lua()
-                with open(os.path.join(sourcebox_path, 'sv_auto_spawner.lua'), 'w') as f:
-                    f.write(spawner_content)
+                install_manifest.write_text(os.path.join(sourcebox_path, 'sv_auto_spawner.lua'), spawner_content)
 
                 print(f"  [created] {self.addon_path}")
                 print("  [files] info.txt, sourcebox_init.lua, sv_*.lua")
@@ -403,6 +399,7 @@ class GModBridge:
         }
 
         try:
+            install_manifest.track(self.command_file)
             with open(self.command_file, 'w') as f:
                 f.write(json.dumps(data))
                 f.flush()
@@ -429,6 +426,7 @@ class GModBridge:
         }
 
         try:
+            install_manifest.track(self.command_file)
             with open(self.command_file, 'w') as f:
                 f.write(json.dumps(data))
             return True
