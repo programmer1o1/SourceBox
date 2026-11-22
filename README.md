@@ -15,8 +15,8 @@ An application with Source Engine integration through VScript and Garry's Mod Lu
 </p>
 
 > [!NOTE]
-> SRCBOX cube model is a custom model! You need to install it into your game custom folder otherwise it won't spawn when you press the cube in SourceBox window.
-> It should be in `YOUR_GAME\custom\srcbox\models\props\srcbox\srcbox.mdl`.
+> Install the custom SRCBOX cube model into your game before spawning it from SourceBox.
+> For Portal 2, Left 4 Dead 2 and legacy CS:GO, extract `models` and `materials` into `portal2`, `left4dead2` or `csgo`, respectively. For TF2, CS:S, Alien Swarm and Portal: Revolution, place the files in `custom/srcbox` inside the game folder.
 > 
 > You can download it [here!](https://github.com/Kiverix/srcbox.mdl/releases)
 
@@ -64,17 +64,32 @@ An application with Source Engine integration through VScript and Garry's Mod Lu
 ### Newer VScript Branches (Experimental)
 | Game | VScript Bridge | Auto-Spawn | Picker | Notes |
 |------|----------------|------------|--------|-------|
-| Left 4 Dead 2 | ✅ | ✅ | ❌ | Commands through `left4dead2/ems/` |
-| Portal 2 | ✅ | ✅ | ❌ | Keeps the game's own `mapspawn.nut` running |
+| Left 4 Dead 2 | ✅ | ✅ | ✅ | Server-side cube physics and Picker for the local survivor host. Commands through `left4dead2/ems/` |
+| Portal 2 | ✅ | ✅ | Experimental | Single-player console controls. Precaches the custom cube on supported local maps and keeps the game's `mapspawn.nut` running |
 | Portal 2: Community Edition | ✅ | ✅ | ❌ | Strata Source, auto-detected |
-| Portal: Revolution | ✅ | ✅ | ❌ | Strata Source, auto-detected |
-| Counter-Strike: Global Offensive | ✅ | ✅ | ❌ | Legacy CS:GO (`csgo.exe`), not CS2 |
-| Alien Swarm | ✅ | ✅ | ❌ | Top-down: spawns in front of the first marine |
+| Portal: Revolution | ✅ | ✅ | ❌ | Strata Source, auto-detected. Precaches the custom cube during map startup |
+| Counter-Strike: Global Offensive | ✅ | ✅ | Experimental | Legacy CS:GO (`csgo.exe`). Cube physics on stock maps uses Stripper:Source |
+| Alien Swarm | ✅ | ✅ | ❌ | Uses the first marine and precaches the custom cube on supported local maps |
 
 > [!NOTE]
-> These games only set up while they are running, and the bridge starts on the next map load. They are untested in-game so far.
+> SourceBox sets up these games while they are running. The bridge starts on the next map load. Cube spawning has been verified in all six games listed here.
+
+For stock Portal 2 and Alien Swarm, start SourceBox before loading a fresh local map. SourceBox prepares an entity lump for each supported loose map so the game precaches the custom cube and can spawn it as a physics prop. SourceBox removes its files on exit. Maps with existing external entity overrides need their own compatible cube template.
+
+In Portal: Revolution, SourceBox can also precache the model from the map-start script if the game ignores the entity lump. Start SourceBox before loading the map.
+
+For 32-bit Windows legacy CS:GO, including CrossOver, SourceBox downloads and installs [Metamod:Source](https://www.metamodsource.net/downloads.php) and [Stripper:Source](https://github.com/alliedmodders/stripper-source/releases) when needed. Start the local game with `-insecure` for plugin support. If SourceBox installs the add-ons, restart CS:GO once with SourceBox still open. Then load a stock map and click the cube. SourceBox restores your Stripper configuration when it exits.
+
+The standalone map copy is also available with `python -m sourcebox.bridges.cube_precache "/path/to/csgo" cs_office`. Load it with `map cs_office_sourcebox`.
+
 > Portal 2, CS:GO, Alien Swarm and Strata can't read files from scripts, so SourceBox sends each command as a tiny script (`sourcebox_command.nut`) that the game re-runs, and spawn results show in the game console.
-> The cube model must be installed for the game (see the note at the top), otherwise the cube spawns as an error model.
+> Install the cube model for the game before trying to spawn it. Games that require a precached cube may skip spawning when the model or map template is missing.
+
+On a local Left 4 Dead 2 campaign, type `!picker` in game chat to toggle aim lock and `!pickernext` to cycle visible targets. Picker applies to the host playing as a survivor and prioritizes infected, then teammates, then physics props. A target you choose with `!pickernext` stays selected while visible. The map must load the updated bridge once. After that you can restart SourceBox on the same map and turn Picker back on in chat.
+
+To try the experimental Picker in stock Portal 2, start SourceBox and load a local single-player map. In the developer console, run `sv_cheats 1`, then `script PickerToggle()`. Picker prioritizes visible turrets, then cubes and other physics props. Use `script PickerNext()` to choose a target and `script PickerToggle()` again to release aim lock.
+
+The experimental legacy CS:GO Picker uses the same console commands in a local practice match with one human player. It prioritizes visible enemy bots, then teammates, then physics props. In both games, a manual selection stays locked while the target remains visible.
 
 ### Garry's Mod Support (Lua Bridge)
 | Version | Lua Bridge | Picker | Auto-Spawn | Notes |
@@ -409,7 +424,7 @@ sourcebox_spawn props/yourmod/model.mdl 300
 - **L4D2**: JSON in `ems/sourcebox_command.txt`, results in `ems/sourcebox_response.txt`
 - **Others**: JSON wrapped in `scripts/vscripts/sourcebox_command.nut`, re-run with `DoIncludeScript`; results print to the game console
 - **Existing hooks**: a game's own `mapspawn.nut` is kept as `sourcebox_original_mapspawn.nut` and still runs first
-- **Detection**: Strata games are recognised by `scriptsystem.dll` beside the launcher in `bin/win64`
+- **Detection**: Strata games are recognised by the script runtime beside the launcher. Older Portal: Revolution builds use `vscript.dll` and are also recognised through the Steam library under CrossOver.
 - **Rate**: Commands checked every 100ms
 
 ### Lua Communication (GMod)

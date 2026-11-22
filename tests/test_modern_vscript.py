@@ -1,10 +1,16 @@
+import lzma
 import os
+import struct
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from source_bridge import SourceBridge
 from sourcebox.bridges import BridgeManager
+from sourcebox.bridges import csgo_addons
+from sourcebox import install_manifest
+from sourcebox.bridges.cube_precache import prepare_csgo_physics_map
 from sourcebox.bridges.modern_vscript import (
     BRIDGE_SCRIPT,
     MANAGED_MARKER,
@@ -25,6 +31,22 @@ def _write(path, text=""):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+MAP_ENTITIES = b'{\n"classname" "worldspawn"\n}\n\0'
+
+
+def _map_with_entities(revision, *, compressed=False):
+    entities = MAP_ENTITIES
+    uncompressed_size = 0
+    if compressed:
+        stream = lzma.compress(entities, format=lzma.FORMAT_ALONE)
+        uncompressed_size = len(entities)
+        entities = struct.pack("<4sII5s", b"LZMA", uncompressed_size, len(stream) - 13, stream[:5]) + stream[13:]
+    header = bytearray(1036)
+    struct.pack_into("<4s5i", header, 0, b"VBSP", 21, len(header), len(entities), 0, uncompressed_size)
+    struct.pack_into("<i", header, len(header) - 4, revision)
+    return bytes(header) + entities
 
 
 def _squirrel_code_only(text):
@@ -80,6 +102,50 @@ class InstallTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_swarm_stages_custom_cube_and_map_precache_until_cleanup(self):
+        mod = self.root / "swarm"
+        cube_path = Path("models/props/srcbox/srcbox.mdl")
+        custom = mod / "custom" / "srcbox"
+        for suffix in (".mdl", ".vvd", ".dx90.vtx", ".phy"):
+            _write(custom / cube_path.with_suffix(suffix), suffix)
+        existing_model_file = _write(mod / cube_path.with_suffix(".phy"), "existing")
+
+        map_bytes = _map_with_entities(42)
+        maps = mod / "maps"
+        maps.mkdir()
+        for name in ("mission", "patched", "lobby"):
+            (maps / f"{name}.bsp").write_bytes(map_bytes)
+        user_override = _write(maps / "patched_l_1.lmp", "user override")
+        manifest = install_manifest.InstallManifest(self.root / "manifest")
+        bridge = ModernVScriptBridge("swarm", mod)
+        with mock.patch.object(install_manifest, "_current", manifest), mock.patch("builtins.print"):
+            self.assertTrue(bridge.prepare_paths())
+            bridge.install_scripts()
+            bridge.install_scripts()
+
+        lump = maps / "mission_l_0.lmp"
+        data = lump.read_bytes()
+        self.assertEqual(struct.unpack_from("<5i", data), (20, 0, 0, len(data) - 20, 42))
+        self.assertTrue(data[20:].startswith(map_bytes[1036:-1]))
+        self.assertIn(b'"model" "models/props/srcbox/srcbox.mdl"', data)
+        self.assertIn(b'"classname" "prop_physics_override"', data)
+        self.assertIn(b'"spawnflags" "8192"', data)
+        self.assertIn(b'"Template01" "sourcebox_cube_prop"', data)
+        self.assertIn(b'"EntityTemplate" "sourcebox_cube_template"', data)
+        self.assertTrue(data.endswith(b"\0"))
+        self.assertEqual((mod / cube_path).read_text(), ".mdl")
+        self.assertEqual(existing_model_file.read_text(), "existing")
+        self.assertFalse((maps / "patched_l_0.lmp").exists())
+        self.assertFalse((maps / "lobby_l_0.lmp").exists())
+
+        manifest.undo()
+        self.assertFalse(lump.exists())
+        self.assertFalse((mod / cube_path).exists())
+        self.assertTrue((custom / cube_path).exists())
+        self.assertEqual(user_override.read_text(), "user override")
+        self.assertEqual((maps / "mission.bsp").read_bytes(), map_bytes)
+        self.assertEqual(existing_model_file.read_text(), "existing")
+
     def test_l4d2_uses_ems_files_and_addon_hook(self):
         mod = self.root / "left4dead2"
         bridge = ModernVScriptBridge("l4d2", mod)
@@ -123,6 +189,126 @@ class InstallTests(unittest.TestCase):
         )
         bridge.reset_command()
         self.assertEqual(Path(bridge.command_file).read_text(), '::g_sourcebox_command <- "";\n')
+
+    def test_portal2_precaches_loose_base_and_dlc_maps(self):
+        mod = self.root / "portal2"
+        base_maps = mod / "maps"
+        dlc_maps = self.root / "portal2_dlc2" / "maps"
+        for suffix in (".mdl", ".vvd", ".dx90.vtx", ".phy"):
+            _write(mod / "models" / "props" / "srcbox" / f"srcbox{suffix}", suffix)
+        base_maps.mkdir()
+        dlc_maps.mkdir(parents=True)
+        (base_maps / "base.bsp").write_bytes(_map_with_entities(1))
+        (base_maps / "shared.bsp").write_bytes(_map_with_entities(2))
+        (dlc_maps / "shared.bsp").write_bytes(_map_with_entities(3))
+        (dlc_maps / "overridden.bsp").write_bytes(_map_with_entities(4))
+        override = _write(base_maps / "overridden_l_0.lmp", "existing patch")
+
+        manifest = install_manifest.InstallManifest(self.root / "manifest")
+        bridge = ModernVScriptBridge("portal2", mod)
+        with mock.patch.object(install_manifest, "_current", manifest), mock.patch("builtins.print"):
+            self.assertTrue(bridge.prepare_paths())
+            bridge.install_scripts()
+
+        base_lump = base_maps / "base_l_0.lmp"
+        dlc_lump = dlc_maps / "shared_l_0.lmp"
+        for path, revision in ((base_lump, 1), (dlc_lump, 3)):
+            data = path.read_bytes()
+            self.assertEqual(struct.unpack_from("<5i", data)[-1], revision)
+            self.assertIn(b'"model" "models/props/srcbox/srcbox.mdl"', data)
+            self.assertIn(b'"classname" "env_entity_maker"', data)
+        self.assertFalse((base_maps / "shared_l_0.lmp").exists())
+        self.assertFalse((dlc_maps / "overridden_l_0.lmp").exists())
+
+        manifest.undo()
+        self.assertFalse(base_lump.exists())
+        self.assertFalse(dlc_lump.exists())
+        self.assertEqual(override.read_text(), "existing patch")
+
+    def test_csgo_prepares_a_separate_bsp_with_a_physics_template(self):
+        mod = self.root / "csgo"
+        for suffix in (".mdl", ".vvd", ".dx90.vtx", ".phy"):
+            _write(mod / "models" / "props" / "srcbox" / f"srcbox{suffix}", suffix)
+        maps = mod / "maps"
+        maps.mkdir()
+        bsp = maps / "de_example.bsp"
+        original = _map_with_entities(7, compressed=True)
+        bsp.write_bytes(original)
+        _write(bsp.with_suffix(".nav"), "stock navigation")
+        prepared = prepare_csgo_physics_map(mod, "de_example")
+        self.assertEqual(prepared, maps / "de_example_sourcebox.bsp")
+        data = prepared.read_bytes()
+        offset, length, version, uncompressed_size = struct.unpack_from("<4i", data, 8)
+        self.assertEqual(version, 0)
+        self.assertEqual(uncompressed_size, 0)
+        self.assertEqual(offset % 4, 0)
+        self.assertEqual(data[24:len(original)], original[24:])
+        entities = data[offset:offset + length]
+        self.assertTrue(entities.startswith(MAP_ENTITIES[:-1]))
+        self.assertIn(b'"classname" "prop_physics_override"', entities)
+        self.assertIn(b'"spawnflags" "8192"', entities)
+        self.assertIn(b'"EntityTemplate" "sourcebox_cube_template"', entities)
+        self.assertEqual(prepared.with_suffix(".nav").read_text(), "stock navigation")
+        with self.assertRaises(FileExistsError):
+            prepare_csgo_physics_map(mod, "de_example")
+        self.assertEqual(bsp.read_bytes(), original)
+        self.assertEqual(prepared.read_bytes(), data)
+
+    def test_csgo_installs_missing_addons_once_and_keeps_custom_configuration(self):
+        mod = self.root / "legacy" / "csgo"
+        gameinfo = _write(mod / "gameinfo.txt", "original")
+        executable = mod.parent / "csgo.exe"
+        exe_header = bytearray(64)
+        exe_header[:2] = b"MZ"
+        struct.pack_into("<I", exe_header, 60, 64)
+        executable.write_bytes(exe_header + b"PE\0\0\x4c\x01")
+        for suffix in (".mdl", ".vvd", ".dx90.vtx", ".phy"):
+            _write(mod / "models" / "props" / "srcbox" / f"srcbox{suffix}", suffix)
+        config = _write(mod / csgo_addons.STRIPPER_CONFIG, "; custom rules\n")
+        original = config.read_bytes()
+        manifest = install_manifest.InstallManifest(self.root / "manifest")
+        bridge = ModernVScriptBridge("csgo", mod)
+        with (
+            mock.patch.object(install_manifest, "_current", manifest),
+            mock.patch.object(csgo_addons, "_download_members",
+                              side_effect=lambda url, digest, members: dict.fromkeys(members, b"release file")) as download,
+            mock.patch("builtins.print"),
+        ):
+            self.assertTrue(bridge.prepare_paths())
+            bridge.install_scripts()
+            bridge.install_scripts()
+        self.assertEqual(download.call_count, len(csgo_addons.PACKAGES))
+        self.assertIn(b"; SourceBox cube template", config.read_bytes())
+        self.assertEqual(gameinfo.read_text(), "original")
+        manifest.undo()
+        self.assertEqual(config.read_bytes(), original)
+        self.assertTrue((mod / "addons/metamod.vdf").is_file())
+        self.assertTrue((mod / "addons/metamod/stripper.vdf").is_file())
+
+    def test_csgo_installs_and_restores_the_stripper_template(self):
+        mod = self.root / "csgo"
+        for suffix in (".mdl", ".vvd", ".dx90.vtx", ".phy"):
+            _write(mod / "models" / "props" / "srcbox" / f"srcbox{suffix}", suffix)
+        stripper = mod / "addons" / "stripper"
+        _write(stripper / "bin" / "stripper.2.csgo.dll")
+        config = _write(stripper / "global_filters.cfg", "; custom rules\r\n")
+        original = config.read_bytes()
+        manifest = install_manifest.InstallManifest(self.root / "manifest")
+        bridge = ModernVScriptBridge("csgo", mod)
+        with mock.patch.object(install_manifest, "_current", manifest), mock.patch("builtins.print"):
+            self.assertTrue(bridge.prepare_paths())
+            bridge.install_scripts()
+            bridge.install_scripts()
+
+        staged = config.read_bytes()
+        self.assertTrue(staged.startswith(original))
+        self.assertEqual(staged.count(b"; SourceBox cube template"), 1)
+        self.assertIn(b'"targetname" "/^sourcebox_cube_(prop|template|maker)$/"', staged)
+        self.assertIn(b'"classname" "prop_physics_override"', staged)
+        self.assertIn(b'"spawnflags" "8192"', staged)
+        self.assertIn(b'"EntityTemplate" "sourcebox_cube_template"', staged)
+        manifest.undo()
+        self.assertEqual(config.read_bytes(), original)
 
     def test_shutdown_sends_quit_and_gives_the_game_time_to_read_it(self):
         for branch, expected in (
@@ -181,6 +367,15 @@ class StrataDetectionTests(unittest.TestCase):
         self.assertIsNone(find_strata_game(self.exe))
         self.assertIsNone(find_strata_game(None))
 
+    def test_older_revolution_runtime_is_recognised(self):
+        runtime_dir = self.root / "bin" / "win64"
+        (runtime_dir / "scriptsystem.dll").rename(runtime_dir / "vscript.dll")
+
+        self.assertEqual(find_strata_game(self.exe), (
+            "Portal: Revolution", str(self.root / "revolution"), str(self.root),
+        ))
+        self.assertIsNone(find_strata_game(str(_write(runtime_dir / "portal2.exe"))))
+
 
 class FakeDiscovery(SourceGameDiscoveryMixin):
     SUPPORTED_GAMES = {
@@ -195,6 +390,7 @@ class FakeDiscovery(SourceGameDiscoveryMixin):
 
     def __init__(self, running_exe=None):
         self.verbose = False
+        self.detected_games = []
         self.modern_bridge = None
         self.mapbase_bridge = None
         self._running_exe = running_exe
@@ -204,6 +400,107 @@ class FakeDiscovery(SourceGameDiscoveryMixin):
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_crossover_revolution_uses_the_game_library(self):
+        with tempfile.TemporaryDirectory() as temp:
+            steam = Path(temp) / "Steam"
+            library = Path(temp) / "Games"
+            root = library / "steamapps" / "common" / "Portal Revolution"
+            mod = root / "revolution"
+            _write(mod / "gameinfo.txt", 'game "Portal: Revolution"')
+            model = Path("models/props/srcbox/srcbox.mdl")
+            for suffix in (".mdl", ".vvd", ".dx90.vtx", ".phy"):
+                _write(mod / "custom" / "srcbox" / model.with_suffix(suffix), suffix)
+            bsp = mod / "maps" / "sp_a1_begin.bsp"
+            bsp.parent.mkdir()
+            bsp.write_bytes(_map_with_entities(12))
+            _write(root / "bin" / "win64" / "revolution.exe")
+            _write(root / "bin" / "win64" / "vscript.dll")
+            process = mock.Mock(info={
+                "name": "wine64-preloader",
+                "exe": str(steam / "wine64-preloader"),
+                "cmdline": [r"S:\steamapps\common\Portal Revolution\bin\win64\revolution.exe"],
+            })
+            discovery = FakeDiscovery()
+            discovery._get_steam_install_path = mock.Mock(return_value=str(steam))
+            discovery._parse_library_folders_vdf = mock.Mock(return_value=[str(steam), str(library)])
+            with (
+                mock.patch("sourcebox.bridges.source_discovery.psutil.process_iter", return_value=[process]),
+                mock.patch("builtins.print"),
+            ):
+                discovery._detect_running_game()
+
+            self.assertEqual(discovery.active_game, "Portal: Revolution")
+            self.assertEqual(discovery.modern_bridge.branch, "revolution")
+            self.assertTrue((mod / "scripts" / "vscripts" / BRIDGE_SCRIPT).is_file())
+            self.assertIn('targetname = "sourcebox_cube_precache"', (mod / "scripts/vscripts/mapspawn.nut").read_text())
+            self.assertTrue((mod / model).is_file())
+            self.assertIn(b'"targetname" "sourcebox_cube_maker"', bsp.with_name("sp_a1_begin_l_0.lmp").read_bytes())
+
+    def test_csgo_uses_crossover_working_directory_for_renamed_install(self):
+        with tempfile.TemporaryDirectory() as temp:
+            library = Path(temp) / "SteamLibrary"
+            common = library / "steamapps" / "common"
+            standard = common / "Counter-Strike Global Offensive" / "csgo"
+            _write(standard / "gameinfo.txt", 'game "Counter-Strike Global Offensive"')
+            legacy_root = common / "csgo legacy"
+            legacy = legacy_root / "csgo"
+            _write(legacy_root / "csgo.exe")
+            _write(legacy / "gameinfo.txt", 'game "Counter-Strike Global Offensive"')
+            temporary_exe = _write(Path(temp) / "winetemp" / "csgo.exe")
+            process = mock.Mock(info={
+                "name": "wine",
+                "exe": str(temporary_exe),
+                "cwd": str(legacy_root),
+                "cmdline": [r"Z:\SteamLibrary\steamapps\common\csgo legacy\csgo.exe"],
+            })
+            discovery = FakeDiscovery()
+            discovery.SUPPORTED_GAMES = SourceBridge.SUPPORTED_GAMES
+            discovery._get_steam_install_path = mock.Mock(return_value=str(library))
+            discovery._parse_library_folders_vdf = mock.Mock(return_value=[str(library)])
+            with (
+                mock.patch("sourcebox.bridges.source_discovery.psutil.process_iter", return_value=[process]),
+                mock.patch("builtins.print"),
+            ):
+                discovery._detect_running_game()
+
+            self.assertEqual(discovery.modern_bridge.branch, "csgo")
+            self.assertEqual(Path(discovery.modern_bridge.mod_path), legacy)
+            self.assertTrue((legacy / "scripts" / "vscripts" / BRIDGE_SCRIPT).is_file())
+            self.assertFalse((standard / "scripts").exists())
+
+    def test_wine_launcher_library_does_not_hide_running_alien_swarm(self):
+        with tempfile.TemporaryDirectory() as temp:
+            launcher_library = Path(temp) / "Steam"
+            launcher = _write(launcher_library / "Steam.AppBundle" / "wine")
+            (launcher_library / "steamapps").mkdir()
+            game_library = Path(temp) / "Games" / "SteamLibrary"
+            mod = game_library / "steamapps" / "common" / "Alien Swarm" / "swarm"
+            _write(mod / "gameinfo.txt", 'game "Alien Swarm"')
+            process = mock.Mock(
+                info={
+                    "name": "wine",
+                    "exe": str(launcher),
+                    "cmdline": [str(launcher), r"S:\steamapps\common\Alien Swarm\swarm.exe"],
+                },
+            )
+            discovery = FakeDiscovery()
+            discovery.active_game = None
+            discovery.SUPPORTED_GAMES = SourceBridge.SUPPORTED_GAMES
+            discovery._get_steam_install_path = mock.Mock(return_value=str(launcher_library))
+            discovery._parse_library_folders_vdf = mock.Mock(
+                return_value=[str(launcher_library), str(game_library)],
+            )
+            with (
+                mock.patch("sourcebox.bridges.source_discovery.psutil.process_iter", return_value=[process]),
+                mock.patch("builtins.print"),
+            ):
+                discovery._detect_running_game()
+
+            self.assertEqual(discovery.active_game, "Alien Swarm")
+            self.assertEqual(discovery.modern_bridge.branch, "swarm")
+            self.assertEqual(Path(discovery.vscripts_path), mod / "scripts" / "vscripts")
+            self.assertTrue((Path(discovery.vscripts_path) / BRIDGE_SCRIPT).is_file())
+
     def test_portal2_install_found_from_steam_library(self):
         with tempfile.TemporaryDirectory() as library:
             mod = Path(library) / "steamapps" / "common" / "Portal 2" / "portal2"

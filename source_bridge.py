@@ -153,6 +153,7 @@ class SourceBridge(SourceGameDiscoveryMixin):
         self.mapbase_bridge = None
         self.modern_bridge = None
         self._running_exe = None
+        self._running_game_cwd = None
 
         try:
             self._cleanup_old_files()

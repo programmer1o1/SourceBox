@@ -205,14 +205,21 @@ class SourceGameDiscoveryMixin:
             return False
 
     def _game_root_candidates(self, game_name, steam_libraries):
-        """install folders to try for a game, the running executable's first"""
+        """Try the running game's locations before its standard Steam folder."""
         candidates = []
         if getattr(self, '_running_exe', None):
             candidates.append(os.path.dirname(os.path.abspath(self._running_exe)))
+        # CrossOver may report a temporary executable while keeping the real game as its cwd.
+        working_dir = getattr(self, '_running_game_cwd', None)
+        if working_dir and any(
+            os.path.isfile(os.path.join(working_dir, exe))
+            for exe in self.SUPPORTED_GAMES[game_name]['executables']
+        ):
+            candidates.append(working_dir)
         for library_path in steam_libraries:
             for steamapps in ('steamapps', 'SteamApps'):
                 candidates.append(os.path.join(library_path, steamapps, 'common', game_name))
-        return candidates
+        return list(dict.fromkeys(candidates))
 
     def _setup_mapbase_path(self, mod_name, steam_libraries):
         """try to locate and setup a mapbase-based mod by name"""
@@ -226,6 +233,34 @@ class SourceGameDiscoveryMixin:
                 return self._setup_mapbase_mod(mod_name, candidate)
 
         return False
+
+    def _find_running_strata_game(self, process_info, steam_libraries):
+        cmdline = process_info.get('cmdline') or ()
+        strata = find_strata_game(process_info.get('exe'), cmdline)
+        if strata:
+            return strata
+
+        launcher = 'revolution.exe'
+        name = (process_info.get('name') or '').lower()
+        arguments = [arg for arg in cmdline if command_mentions_executable([arg], [launcher])]
+        if name != launcher and not arguments:
+            return None
+
+        # CrossOver can report Wine as the executable and pass a Windows path.
+        candidates = [arg.strip('"') for arg in arguments if os.path.isabs(arg.strip('"'))]
+        cwd = process_info.get('cwd')
+        if cwd:
+            candidates.extend((os.path.join(cwd, launcher), os.path.join(cwd, 'bin', 'win64', launcher)))
+        candidates.extend(
+            os.path.join(library, steamapps, 'common', 'Portal Revolution', 'bin', 'win64', launcher)
+            for library in steam_libraries
+            for steamapps in ('steamapps', 'SteamApps')
+        )
+        for candidate in candidates:
+            strata = find_strata_game(candidate, cmdline)
+            if strata:
+                return strata
+        return None
 
     def _detect_running_game(self):
         """find which source game is currently running"""
@@ -260,7 +295,7 @@ class SourceGameDiscoveryMixin:
         ]
 
         try:
-            for proc in psutil.process_iter(['name', 'cmdline', 'exe']):
+            for proc in psutil.process_iter(['name', 'cmdline', 'exe', 'cwd']):
                 try:
                     proc_name = proc.info.get('name')
                     if not proc_name:
@@ -268,7 +303,7 @@ class SourceGameDiscoveryMixin:
 
                     cmdline = proc.info.get('cmdline')
                     if not cmdline:
-                        continue
+                        cmdline = ()
 
                     # skip gamescope wrapper processes
                     if proc_name in ['gamescope', 'gamescope-session', 'gamescopereaper']:
@@ -354,11 +389,14 @@ class SourceGameDiscoveryMixin:
                                     return
 
                     # Strata Source games (P2CE, Portal: Revolution) by launcher layout
-                    strata = find_strata_game(proc.info.get('exe'), cmdline)
+                    strata = self._find_running_strata_game(proc.info, all_steam_libraries)
                     if strata:
                         running_strata = strata
                         print(f"  [found] {strata[0]} (Strata Source)")
                         break
+
+                    if not cmdline:
+                        continue
 
                     # check for supported games
                     for game_name, game_info in self.SUPPORTED_GAMES.items():
@@ -375,6 +413,7 @@ class SourceGameDiscoveryMixin:
                             game_info['game_dir'] in cmdline_str.lower():
                                 running_game = game_name
                                 self._running_exe = proc.info.get('exe')
+                                self._running_game_cwd = proc.info.get('cwd')
                                 print(f"  [found] {game_name}")
                                 self._log(f"  process: {proc_name}")
                                 break
@@ -639,7 +678,8 @@ class SourceGameDiscoveryMixin:
 
         if running_strata:
             title, mod_path, root = running_strata
-            if self._setup_modern_game(title, 'strata', mod_path, strata_shadowed_hooks(root)):
+            branch = 'revolution' if title == 'Portal: Revolution' else 'strata'
+            if self._setup_modern_game(title, branch, mod_path, strata_shadowed_hooks(root)):
                 return
             print(f"[warning] found {title} but couldn't setup paths")
 
@@ -670,8 +710,9 @@ class SourceGameDiscoveryMixin:
             active_library = self._get_running_game_library(running_game)
 
             if active_library:
-                steam_libraries = [active_library]
-                print(f"  [active library] {active_library}")
+                # A Wine launcher can point at a different library from the game.
+                steam_libraries = list(dict.fromkeys([active_library, *all_steam_libraries]))
+                print(f"  [preferred library] {active_library}")
             else:
                 steam_libraries = all_steam_libraries
                 print("  [warning] couldn't detect active library, checking all libraries")

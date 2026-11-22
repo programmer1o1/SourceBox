@@ -1,4 +1,4 @@
-"""VScript bridge for the newer branches: L4D2, Portal 2, CS:GO, Alien Swarm, Strata.
+"""VScript bridge for L4D2, Portal 2, CS:GO, Alien Swarm and Strata games.
 
 These games share one Squirrel script (bridge_scripts/modern/sourcebox_bridge.nut)
 but differ in how SourceBox can hand it commands:
@@ -15,8 +15,14 @@ sourcebox_original_mapspawn.nut and still runs first.
 
 import os
 import time
+import zipfile
 
 from sourcebox import install_manifest
+from sourcebox.bridges.cube_precache import (
+    install_csgo_cube_filter,
+    install_cube_precache,
+)
+from sourcebox.bridges.csgo_addons import install_csgo_addons
 from sourcebox.resources import load_text_resource
 
 BRANCHES = {
@@ -24,6 +30,7 @@ BRANCHES = {
     "portal2": {"transport": "include", "hook": "mapspawn.nut"},
     "csgo": {"transport": "include", "hook": "mapspawn.nut"},
     "swarm": {"transport": "include", "hook": "mapspawn.nut"},
+    "revolution": {"transport": "include", "hook": "mapspawn.nut"},
     "strata": {"transport": "include", "hook": "mapspawn.nut"},
 }
 
@@ -47,10 +54,17 @@ def bridge_script(branch):
         f'::SOURCEBOX_BRANCH <- "{branch}";\n'
         f'::SOURCEBOX_TRANSPORT <- "{transport}";\n\n'
     )
-    return header + load_text_resource("bridge_scripts/modern/sourcebox_bridge.nut")
+    script = header + load_text_resource("bridge_scripts/modern/sourcebox_bridge.nut")
+    if branch == "l4d2":
+        script += "\n" + load_text_resource("bridge_scripts/modern/l4d2_picker.nut")
+    elif branch == "portal2":
+        script += "\n" + load_text_resource("bridge_scripts/modern/portal2_picker.nut")
+    elif branch == "csgo":
+        script += "\n" + load_text_resource("bridge_scripts/modern/csgo_picker.nut")
+    return script
 
 
-def hook_script(run_original):
+def hook_script(run_original, branch=None, cube_assets_ready=False):
     """The map-start hook: the game's original first, then the bridge."""
     lines = [
         f"{MANAGED_MARKER}: loads the SourceBox bridge on every map.",
@@ -63,10 +77,20 @@ def hook_script(run_original):
             f'    DoIncludeScript("{ORIGINAL_HOOK[:-4]}", getroottable());',
             "} catch (e) {}",
         ]
+    if branch == "portal2":
+        lines.append(load_text_resource("bridge_scripts/modern/portal2_mapspawn.nut"))
+        return "\n".join(lines)
+    if branch == "revolution" and cube_assets_ready:
+        lines.append(load_text_resource("bridge_scripts/modern/revolution_mapspawn.nut"))
+
     lines += [
         "try {",
-        f'    DoIncludeScript("{BRIDGE_SCRIPT[:-4]}", getroottable());',
-        "} catch (e) {}",
+        f'    if (DoIncludeScript("{BRIDGE_SCRIPT[:-4]}", getroottable()) == false) {{',
+        f'        printl("[SourceBox] {BRIDGE_SCRIPT} could not be loaded from the map-start hook");',
+        "    }",
+        "} catch (e) {",
+        '    printl("[SourceBox] map-start hook failed: " + e);',
+        "}",
         "",
     ]
     return "\n".join(lines)
@@ -153,14 +177,31 @@ class ModernVScriptBridge:
 
     def install_scripts(self):
         """Install the bridge and the map-start hook; safe to run repeatedly."""
+        cube_assets_ready = False
+        if self.branch == "csgo":
+            try:
+                if install_csgo_addons(self.mod_path):
+                    print("  [cube] installed Metamod and Stripper; restart CS:GO once with -insecure")
+            except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
+                print(f"  [warning] couldn't automatically install the CS:GO add-ons: {error}")
+            try:
+                if install_csgo_cube_filter(self.mod_path):
+                    print("  [cube] stock map template staged for Stripper:Source")
+            except OSError as error:
+                print(f"  [warning] couldn't install the CS:GO cube filter: {error}")
+        elif self.branch in ("portal2", "swarm", "revolution"):
+            try:
+                cube_assets_ready = install_cube_precache(self.mod_path, self.branch)
+            except OSError as error:
+                print(f"[warning] couldn't install custom cube precache: {error}")
         _write(os.path.join(self.vscripts_path, BRIDGE_SCRIPT), bridge_script(self.branch))
-        self._install_hook()
+        self._install_hook(cube_assets_ready)
         # an empty command file keeps the include transport from logging
         # "script not found" every poll before the first spawn
         self.reset_command()
         return True
 
-    def _install_hook(self):
+    def _install_hook(self, cube_assets_ready):
         hook_path = os.path.join(self.vscripts_path, self.hook_name)
         original_path = os.path.join(self.vscripts_path, ORIGINAL_HOOK)
 
@@ -177,7 +218,7 @@ class ModernVScriptBridge:
                     _write(original_path, content)
                     break
 
-        _write(hook_path, hook_script(os.path.exists(original_path)))
+        _write(hook_path, hook_script(os.path.exists(original_path), self.branch, cube_assets_ready))
 
     def _repair_untracked_install(self, hook_path, original_path, current):
         """Undo hook files left by a SourceBox from before installs were recorded.
@@ -241,8 +282,8 @@ STRATA_IGNORED_FOLDERS = {"bin", "hammer", "platform", "portal2", "sdk_content",
 def strata_root_from_exe(exe_path):
     """Install root of a Strata Source game, from its launcher path, or None.
 
-    Strata launchers live in <root>/bin/win64 (or linux64) beside
-    scriptsystem.dll, which Valve's own branches do not ship.
+    Strata launchers live in <root>/bin/win64 (or linux64). Older Revolution
+    builds have vscript.dll instead of the newer scriptsystem library.
     """
     if not exe_path:
         return None
@@ -250,9 +291,15 @@ def strata_root_from_exe(exe_path):
     bin_dir = os.path.dirname(exe_dir)
     if os.path.basename(bin_dir).lower() != "bin":
         return None
+    root = os.path.dirname(bin_dir)
     for library in ("scriptsystem.dll", "libscriptsystem.so"):
         if os.path.isfile(os.path.join(exe_dir, library)):
-            return os.path.dirname(bin_dir)
+            return root
+    if (os.path.basename(exe_path).lower() == "revolution.exe"
+            and os.path.isfile(os.path.join(exe_dir, "revolution.exe"))
+            and os.path.isfile(os.path.join(exe_dir, "vscript.dll"))
+            and game_title(os.path.join(root, "revolution", "gameinfo.txt")) == "Portal: Revolution"):
+        return root
     return None
 
 

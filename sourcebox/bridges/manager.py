@@ -162,6 +162,12 @@ class BridgeManager:
         print("\n[features]")
         print("  python bridge - spawn the cube from sourcebox")
         print("  auto-spawner - spawns 1 cube near the player on map load")
+        if modern.branch == "l4d2":
+            print("  picker - local survivor aim lock (!picker and !pickernext in game chat)")
+        elif modern.branch == "portal2":
+            print("  picker - experimental single-player aim lock (sv_cheats 1, script PickerToggle())")
+        elif modern.branch == "csgo":
+            print("  picker - local practice aim lock (sv_cheats 1, script PickerToggle())")
         print("\n[auto-load] the bridge starts on the next map load")
         print("\n[manual] if needed:")
         print("         script_execute sourcebox_bridge")

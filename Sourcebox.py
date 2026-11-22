@@ -61,14 +61,6 @@ if OPERATING_SYSTEM == 'Windows':
     except:
         pass
 
-# conditional glut import
-try:
-    from OpenGL.GLUT import *
-    GLUT_AVAILABLE = True
-except ImportError:
-    GLUT_AVAILABLE = False
-    print("Warning: GLUT not available, some features may be limited")
-
 # import source_bridge conditionally
 try:
     from source_bridge import SourceBridge, WINDOWS_API_AVAILABLE
@@ -130,12 +122,6 @@ def set_display_mode(size, flags=DOUBLEBUF | OPENGL):
 def init_pygame():
     try:
         pygame.init()
-
-        if GLUT_AVAILABLE:
-            try:
-                glutInit()
-            except:
-                print("GLUT initialization failed, continuing without it")
 
         # get_desktop_sizes() is more reliable than display.Info() on Linux/Wayland,
         # especially after screen lock/unlock where display.Info() can return wrong values

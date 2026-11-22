@@ -114,6 +114,25 @@ class InstallManifest:
                 self.files[path]["sha256"] = _file_sha256(path)
             self._save()
 
+    def write_new_bytes(self, path, data):
+        """Install a binary file for this session if the destination is unused."""
+        path = os.path.abspath(path)
+        with self._lock:
+            self.make_dirs(os.path.dirname(path))
+            try:
+                handle = open(path, "xb")
+            except FileExistsError:
+                return False
+            try:
+                with handle:
+                    handle.write(data)
+            except OSError:
+                os.remove(path)
+                raise
+            self.files[path] = {"kind": "created", "sha256": _sha256(data), "backup": None}
+            self._save()
+            return True
+
     # ------------------------------------------------------------ undo
 
     def undo(self):

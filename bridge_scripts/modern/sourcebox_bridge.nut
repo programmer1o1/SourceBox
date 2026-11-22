@@ -2,7 +2,7 @@
 // Left 4 Dead 2, Portal 2, CS:GO, Alien Swarm and Strata Source (P2CE, Portal: Revolution).
 //
 // SourceBox writes two lines above this file when it installs it:
-//   ::SOURCEBOX_BRANCH    "l4d2" | "portal2" | "csgo" | "swarm" | "strata"
+//   ::SOURCEBOX_BRANCH    "l4d2" | "portal2" | "csgo" | "swarm" | "strata" | "revolution"
 //   ::SOURCEBOX_TRANSPORT "file"    - commands arrive in ems/sourcebox_command.txt (L4D2)
 //                         "include" - commands arrive as scripts/vscripts/sourcebox_command.nut
 //
@@ -17,9 +17,13 @@ if (!("Entities" in getroottable())) {
 }
 
 ::SOURCEBOX_MODEL <- "models/props/srcbox/srcbox.mdl";
+::SOURCEBOX_USES_CUBE_TEMPLATE <- (::SOURCEBOX_BRANCH == "swarm" ||
+    ::SOURCEBOX_BRANCH == "portal2" || ::SOURCEBOX_BRANCH == "csgo" || ::SOURCEBOX_BRANCH == "revolution");
 ::SOURCEBOX_POLL <- 0.1;
+::SOURCEBOX_PICKER_POLL <- 0.02;
 ::SOURCEBOX_AUTOSPAWN_DELAY <- 3.0;
-// MASK_SOLID, for Strata's TraceLineEx
+::SOURCEBOX_FORCE_SERVER_PHYSICS <- 8192;
+// MASK_SOLID, for Strata traces
 ::SOURCEBOX_MASK_SOLID <- 33570827;
 
 // a new generation per map load stops polls queued by an older load
@@ -37,6 +41,25 @@ if (!("g_sourcebox_gen" in getroottable())) {
 ::g_sourcebox_autospawned <- false;
 ::g_sourcebox_stopped <- false;
 ::g_sourcebox_autospawn_at <- 0.0;
+::g_sourcebox_portal2_next_poll <- 0.0;
+::g_sourcebox_picker_hud_at <- 0.0;
+if (::SOURCEBOX_BRANCH == "portal2" && ("SourceBoxClearPortal2PickerHud" in getroottable())) {
+    ::SourceBoxClearPortal2PickerHud();
+}
+::g_sourcebox_portal2_hud_visible <- false;
+
+if (::SOURCEBOX_BRANCH == "csgo") {
+    if ("g_sourcebox_csgo_timer" in getroottable() && ::g_sourcebox_csgo_timer != null &&
+        ::g_sourcebox_csgo_timer.IsValid()) {
+        ::g_sourcebox_csgo_timer.Destroy();
+    }
+    ::g_sourcebox_csgo_timer <- null;
+    ::g_sourcebox_csgo_timer_attempted <- false;
+    ::g_sourcebox_csgo_next_poll <- 0.0;
+    ::g_sourcebox_csgo_round <- null;
+    ::g_sourcebox_csgo_warmup <- null;
+    ::g_sourcebox_csgo_auto_cube <- null;
+}
 
 ::SourceBoxLog <- function(message) {
     try {
@@ -173,6 +196,78 @@ if (!("g_sourcebox_gen" in getroottable())) {
 
 // ---------------------------------------------------------------- player and view
 
+::SourceBoxPickerHud <- function(player, clear = false) {
+    local now = Time();
+    if (!clear && (::g_sourcebox_portal2_hud_visible || now < ::g_sourcebox_picker_hud_at)) {
+        return;
+    }
+    ::g_sourcebox_picker_hud_at = now + 0.5;
+    local settings = {
+        message = "PICKER ON", channel = 1, x = -1, y = 0.53,
+        color = "255 160 0 255", color2 = "255 160 0 255",
+        effect = 0, fadein = 0, fadeout = 0, holdtime = 0.65, spawnflags = 0
+    };
+    if (::SOURCEBOX_BRANCH == "portal2") {
+        // A single message avoids overlapping draws during HUD refreshes.
+        // Clear it by replacing the same channel when Picker stops.
+        settings.channel = 5;
+        settings.message = clear ? " " : "PICKER ON";
+        settings.holdtime = clear ? 0.0 : 86400.0;
+    }
+    try {
+        local text = Entities.CreateByClassname("game_text");
+        if (text != null) {
+            foreach (key, value in settings) {
+                text.__KeyValueFromString(key, value.tostring());
+            }
+            EntFireByHandle(text, "Display", "", 0.0, player, null);
+            ::g_sourcebox_portal2_hud_visible = ::SOURCEBOX_BRANCH == "portal2" && !clear;
+            EntFireByHandle(text, "Kill", "", 0.05, null, null);
+        }
+    } catch (error) {
+        ::g_sourcebox_picker_hud_at = now + 2.0;
+    }
+}
+
+::SourceBoxClearPortal2PickerHud <- function() {
+    if (!::g_sourcebox_portal2_hud_visible) {
+        return;
+    }
+    try {
+        local player = GetPlayer();
+        if (player != null && player.IsValid()) {
+            ::SourceBoxPickerHud(player, true);
+        }
+    } catch (error) {}
+    ::g_sourcebox_portal2_hud_visible = false;
+}
+
+::SourceBoxSmoothPickerAim <- function(picker, player, delta) {
+    local pitch = atan2(-delta.z, sqrt(delta.x * delta.x + delta.y * delta.y)) * 57.2957795;
+    local yaw = atan2(delta.y, delta.x) * 57.2957795;
+    local now = Time();
+    if (picker.angles == null) {
+        local forward = player.GetForwardVector();
+        local horizontal = sqrt(forward.x * forward.x + forward.y * forward.y);
+        picker.angles = Vector(atan2(-forward.z, horizontal) * 57.2957795,
+            atan2(forward.y, forward.x) * 57.2957795, 0);
+        picker.updated = now - ::SOURCEBOX_PICKER_POLL;
+    }
+    local current = picker.angles;
+    local elapsed = now - picker.updated;
+    if (elapsed > 0.05) elapsed = 0.05;
+    local blend = 1.0 - pow(0.5, elapsed / 0.08);
+    local deltaYaw = yaw - current.y;
+    while (deltaYaw > 180.0) deltaYaw -= 360.0;
+    while (deltaYaw < -180.0) deltaYaw += 360.0;
+    local newYaw = current.y + deltaYaw * blend;
+    if (newYaw > 180.0) newYaw -= 360.0;
+    if (newYaw < -180.0) newYaw += 360.0;
+    picker.angles = Vector(current.x + (pitch - current.x) * blend, newYaw, 0);
+    picker.updated = now;
+    SendToConsole(format("setang %.4f %.4f", picker.angles.x, picker.angles.y));
+}
+
 ::SourceBoxPlayer <- function() {
     local player = null;
     if (::SOURCEBOX_BRANCH == "swarm") {
@@ -241,7 +336,7 @@ if (!("g_sourcebox_gen" in getroottable())) {
             return end;
         } catch (e) {}
     }
-    if (::SOURCEBOX_BRANCH == "strata") {
+    if (::SOURCEBOX_BRANCH == "strata" || ::SOURCEBOX_BRANCH == "revolution") {
         try {
             local result = TraceLineEx(start, end, ::SOURCEBOX_MASK_SOLID, ignore, 0);
             return result.GetEndPos();
@@ -256,18 +351,103 @@ if (!("g_sourcebox_gen" in getroottable())) {
 
 // ---------------------------------------------------------------- spawning
 
+::SourceBoxRevolutionCubeIsPrecached <- function() {
+    local prop = Entities.FindByName(null, "sourcebox_cube_precache");
+    return prop != null && prop.IsValid() && prop.GetModelName() == ::SOURCEBOX_MODEL;
+}
+
+::SourceBoxSpawnProblem <- function(model) {
+    if (::SOURCEBOX_BRANCH == "l4d2") {
+        try {
+            if (IsModelPrecached(model)) {
+                return null;
+            }
+            local world = Entities.FindByClassname(null, "worldspawn");
+            if (world != null && world.PrecacheModel(model) > 0 && IsModelPrecached(model)) {
+                return null;
+            }
+        } catch (e) {}
+        return "model not precached on this map: " + model;
+    }
+
+    if (!::SOURCEBOX_USES_CUBE_TEMPLATE) {
+        return null;
+    }
+
+    if (model == ::SOURCEBOX_MODEL) {
+        if (Entities.FindByName(null, "sourcebox_cube_maker") != null) {
+            return null;
+        }
+        if (::SOURCEBOX_BRANCH == "revolution" && ::SourceBoxRevolutionCubeIsPrecached()) {
+            return null;
+        }
+        if (::SOURCEBOX_BRANCH == "csgo") {
+            return "custom cube template unavailable; load a map with Stripper:Source active or use a SourceBox-prepared map";
+        }
+        return "custom cube template unavailable; load a fresh supported map";
+    }
+
+    // Keep the precache check for commands that request a different model.
+    try {
+        local existing = Entities.FindByModel(null, model);
+        if (existing != null && existing.GetModelName() == model) {
+            return null;
+        }
+    } catch (e) {}
+    return "model not precached on this map: " + model;
+}
+
+::SourceBoxCreateTemplateCube <- function(position) {
+    try {
+        local maker = Entities.FindByName(null, "sourcebox_cube_maker");
+        if (maker == null) {
+            return null;
+        }
+
+        // The maker spawns synchronously and returns no handle. Its template
+        // preserves the cube name so we can identify the new instance.
+        local existing = {};
+        local cube = null;
+        while ((cube = Entities.FindByName(cube, "sourcebox_cube_prop")) != null) {
+            existing[cube] <- true;
+        }
+        maker.SpawnEntityAtLocation(position, Vector(0, 0, 0));
+        while ((cube = Entities.FindByName(cube, "sourcebox_cube_prop")) != null) {
+            if (!(cube in existing) && cube.GetModelName() == ::SOURCEBOX_MODEL) {
+                return cube;
+            }
+        }
+    } catch (e) {
+        ::SourceBoxLog("could not spawn physics cube: " + e);
+    }
+    return null;
+}
+
 // cubes keep the model's own colours here (no tint, unlike the TF2-branch bridge)
 ::SourceBoxCreateProp <- function(model, position) {
+    if (::SOURCEBOX_USES_CUBE_TEMPLATE && model == ::SOURCEBOX_MODEL) {
+        local cube = ::SourceBoxCreateTemplateCube(position);
+        if (cube != null || ::SOURCEBOX_BRANCH != "revolution" || !::SourceBoxRevolutionCubeIsPrecached()) {
+            return cube;
+        }
+        try {
+            cube = CreateEntityByName("prop_physics_override", {
+                model = model, spawnflags = ::SOURCEBOX_FORCE_SERVER_PHYSICS
+            });
+        } catch (e) {}
+        if (cube != null) {
+            ::SourceBoxPlace(cube, position);
+        }
+        return cube;
+    }
     local prop = null;
 
     if (::SOURCEBOX_BRANCH == "l4d2") {
         try {
-            PrecacheModel(model);
-        } catch (e) {}
-        try {
             prop = SpawnEntityFromTable("prop_physics_override", {
                 origin = position,
-                model = model
+                model = model,
+                spawnflags = ::SOURCEBOX_FORCE_SERVER_PHYSICS
             });
         } catch (e) {}
     }
@@ -284,7 +464,7 @@ if (!("g_sourcebox_gen" in getroottable())) {
         } catch (e) {}
     }
 
-    if (prop == null) {
+    if (prop == null && ::SOURCEBOX_BRANCH != "l4d2") {
         try {
             PrecacheModel(model);
         } catch (e) {}
@@ -371,8 +551,24 @@ if (!("g_sourcebox_gen" in getroottable())) {
         return;
     }
 
+    local problem = ::SourceBoxSpawnProblem(model);
+    if (problem != null) {
+        ::SourceBoxRespond("error", problem);
+        return;
+    }
     local eye = ::SourceBoxEye(player);
-    local hit = ::SourceBoxTrace(eye, eye + ::SourceBoxForward(player) * distance, player);
+    local forward = ::SourceBoxForward(player);
+    local end = eye + forward * distance;
+    local hit = ::SourceBoxTrace(eye, end, player);
+    if ((::SOURCEBOX_USES_CUBE_TEMPLATE || ::SOURCEBOX_BRANCH == "l4d2") &&
+        model == ::SOURCEBOX_MODEL && (end - hit).Length() > 1.0) {
+        // Leave room for the cube's collision hull when the trace hits a wall.
+        if ((hit - eye).Length() <= 12.0) {
+            ::SourceBoxRespond("error", "no room to spawn the cube");
+            return;
+        }
+        hit = hit - forward * 12.0;
+    }
     local prop = ::SourceBoxCreateProp(model, hit + Vector(0, 0, 10));
 
     if (prop != null) {
@@ -387,6 +583,11 @@ if (!("g_sourcebox_gen" in getroottable())) {
 ::SourceBoxAutoSpawn <- function() {
     local player = ::SourceBoxPlayer();
     if (player == null) {
+        return false;
+    }
+    local problem = ::SourceBoxSpawnProblem(::SOURCEBOX_MODEL);
+    if (problem != null) {
+        ::SourceBoxLog("auto-spawn skipped: " + problem);
         return false;
     }
     local eye = ::SourceBoxEye(player);
@@ -405,6 +606,9 @@ if (!("g_sourcebox_gen" in getroottable())) {
         local ground = ::SourceBoxTrace(above, above - Vector(0, 0, 1024), player);
         local prop = ::SourceBoxCreateProp(::SOURCEBOX_MODEL, ground + Vector(0, 0, 16));
         if (prop != null) {
+            if (::SOURCEBOX_BRANCH == "csgo") {
+                ::g_sourcebox_csgo_auto_cube = prop;
+            }
             ::SourceBoxLog("auto-spawned cube: " + ::SourceBoxDescribe(prop));
             ::SourceBoxWatch(prop);
             return true;
@@ -415,8 +619,63 @@ if (!("g_sourcebox_gen" in getroottable())) {
 
 // ---------------------------------------------------------------- polling
 
+::SourceBoxCSGOCheckRound <- function() {
+    local round = ScriptGetRoundsPlayed();
+    local warmup = ScriptIsWarmupPeriod();
+    local cube = ::g_sourcebox_csgo_auto_cube;
+    if (::g_sourcebox_csgo_round != null &&
+        (round != ::g_sourcebox_csgo_round || warmup != ::g_sourcebox_csgo_warmup) &&
+        cube != null && !cube.IsValid()) {
+        ::g_sourcebox_csgo_auto_cube = null;
+        ::g_sourcebox_autospawned = false;
+        ::g_sourcebox_autospawn_at = Time() + 1.0;
+    }
+    ::g_sourcebox_csgo_round = round;
+    ::g_sourcebox_csgo_warmup = warmup;
+}
+
+::SourceBoxCSGOStartTimer <- function() {
+    ::g_sourcebox_csgo_timer_attempted = true;
+    local timer = null;
+    try {
+        timer = Entities.CreateByClassname("logic_timer");
+        if (timer == null) {
+            throw "logic_timer unavailable";
+        }
+        // CS:GO keeps soundent entities across round cleanup. The native timer
+        // keeps thinking even when the game's queued I/O events are discarded.
+        if (!timer.__KeyValueFromString("classname", "soundent")) {
+            throw "could not preserve the timer";
+        }
+        timer.__KeyValueFromFloat("RefireTime", ::SOURCEBOX_PICKER_POLL);
+        timer.ValidateScriptScope();
+        timer.GetScriptScope().SourceBoxTimerTick <- function() {
+            local now = Time();
+            if (now >= ::g_sourcebox_csgo_next_poll) {
+                ::SourceBoxTick();
+                ::g_sourcebox_csgo_next_poll = now + ::SOURCEBOX_POLL;
+            }
+            if (::g_sourcebox_stopped) {
+                self.Destroy();
+            } else {
+                ::SourceBoxCSGOPickerThink();
+            }
+        };
+        timer.ConnectOutput("OnTimer", "SourceBoxTimerTick");
+        EntFireByHandle(timer, "Enable", "", 0.0, null, null);
+        ::g_sourcebox_csgo_timer = timer;
+        return true;
+    } catch (error) {
+        if (timer != null && timer.IsValid()) {
+            timer.Destroy();
+        }
+        ::SourceBoxLog("could not start the CS:GO round timer: " + error);
+        return false;
+    }
+}
+
 ::SourceBoxTick <- function() {
-    if (::g_sourcebox_stopped) {
+    if (::g_sourcebox_stopped && ::SOURCEBOX_BRANCH != "l4d2") {
         return;
     }
     local command = null;
@@ -424,11 +683,22 @@ if (!("g_sourcebox_gen" in getroottable())) {
         command = ::SourceBoxReadCommand();
     } catch (e) {}
     if (command == null || command == "quit") {
-        // SourceBox closed: it sends "quit" first, and if it was killed instead
-        // its files are simply gone. Either way, stop for the rest of this map.
-        ::g_sourcebox_stopped <- true;
-        ::SourceBoxLog("SourceBox closed, bridge stopped");
+        if (!::g_sourcebox_stopped) {
+            ::g_sourcebox_stopped <- true;
+            if (::SOURCEBOX_BRANCH == "portal2") {
+                ::SourceBoxClearPortal2PickerHud();
+            }
+            if (::SOURCEBOX_BRANCH == "l4d2" || ::SOURCEBOX_BRANCH == "portal2" || ::SOURCEBOX_BRANCH == "csgo") {
+                ::g_sourcebox_picker.enabled = false;
+                ::g_sourcebox_picker.target = null;
+            }
+            ::SourceBoxLog("SourceBox closed, bridge stopped");
+        }
         return;
+    }
+    if (::g_sourcebox_stopped) {
+        ::g_sourcebox_stopped <- false;
+        ::SourceBoxLog("SourceBox reconnected");
     }
     try {
         ::SourceBoxHandle(command);
@@ -437,6 +707,12 @@ if (!("g_sourcebox_gen" in getroottable())) {
     try {
         ::SourceBoxCheckWatch();
     } catch (e) {}
+
+    if (::SOURCEBOX_BRANCH == "csgo") {
+        try {
+            ::SourceBoxCSGOCheckRound();
+        } catch (e) {}
+    }
 
     if (!::g_sourcebox_autospawned && Time() >= ::g_sourcebox_autospawn_at) {
         ::g_sourcebox_autospawned <- true;
@@ -448,8 +724,13 @@ if (!("g_sourcebox_gen" in getroottable())) {
 
 ::SourceBoxSchedule <- function(gen, delay) {
     local world = Entities.FindByClassname(null, "worldspawn");
+    local code = "::SourceBoxPoll(" + gen + ")";
     if (world != null) {
-        EntFireByHandle(world, "RunScriptCode", "::SourceBoxPoll(" + gen + ")", delay, null, null);
+        EntFireByHandle(world, "RunScriptCode", code, delay, null, null);
+    } else if (::SOURCEBOX_BRANCH == "csgo" || ::SOURCEBOX_BRANCH == "portal2" || ::SOURCEBOX_BRANCH == "revolution") {
+        // mapspawn can run before worldspawn is available to scripts.
+        // Resolve the target when the event fires.
+        DoEntFire("worldspawn", "RunScriptCode", code, delay, null, null);
     }
 }
 
@@ -457,14 +738,43 @@ if (!("g_sourcebox_gen" in getroottable())) {
     if (gen != ::g_sourcebox_gen) {
         return;
     }
-    ::SourceBoxTick();
+    if (::SOURCEBOX_BRANCH == "csgo" && !::g_sourcebox_csgo_timer_attempted &&
+        ::SourceBoxCSGOStartTimer()) {
+        return;
+    }
+    local delay = ::SOURCEBOX_POLL;
+    local now = Time();
+    if (::SOURCEBOX_BRANCH != "portal2" || now >= ::g_sourcebox_portal2_next_poll) {
+        ::SourceBoxTick();
+        ::g_sourcebox_portal2_next_poll = now + ::SOURCEBOX_POLL;
+    }
     if (!::g_sourcebox_stopped) {
-        ::SourceBoxSchedule(gen, ::SOURCEBOX_POLL);
+        if (::SOURCEBOX_BRANCH == "portal2") {
+            ::SourceBoxPortal2PickerThink();
+            if (::g_sourcebox_picker.enabled) {
+                delay = ::SOURCEBOX_PICKER_POLL;
+            }
+        } else if (::SOURCEBOX_BRANCH == "csgo") {
+            ::SourceBoxCSGOPickerThink();
+        }
+        ::SourceBoxSchedule(gen, delay);
     }
 }
 
 ::SourceBoxStart <- function() {
     ::g_sourcebox_autospawn_at <- Time() + ::SOURCEBOX_AUTOSPAWN_DELAY;
+
+    if (::SOURCEBOX_BRANCH == "portal2") {
+        local first = Entities.FindByName(null, "sourcebox_portal2_activate");
+        if (first != null) {
+            local extra = Entities.FindByName(first, "sourcebox_portal2_activate");
+            while (extra != null) {
+                local next = Entities.FindByName(extra, "sourcebox_portal2_activate");
+                EntFireByHandle(extra, "Kill", "", 0.0, null, null);
+                extra = next;
+            }
+        }
+    }
 
     if (::SOURCEBOX_BRANCH == "l4d2") {
         // L4D2 has no EntFireByHandle; a think function on worldspawn polls instead
@@ -473,10 +783,19 @@ if (!("g_sourcebox_gen" in getroottable())) {
             return;
         }
         world.ValidateScriptScope();
+        local nextPoll = 0.0;
         world.GetScriptScope().SourceBoxThink <- function() {
-            ::SourceBoxTick();
-            // a think cannot be removed from here; once stopped it just idles
-            return ::g_sourcebox_stopped ? 60.0 : ::SOURCEBOX_POLL;
+            local now = Time();
+            if (now >= nextPoll) {
+                ::SourceBoxTick();
+                nextPoll = now + ::SOURCEBOX_POLL;
+            }
+            if (::g_sourcebox_stopped) {
+                // FileToString can quietly check for a restarted SourceBox.
+                return 1.0;
+            }
+            // Keep file polling at its usual rate while updating the aim more often.
+            return ::SourceBoxL4D2PickerThink(now) ? 0.03 : ::SOURCEBOX_POLL;
         };
         AddThinkToEnt(world, "SourceBoxThink");
     } else {
