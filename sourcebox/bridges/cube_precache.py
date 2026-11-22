@@ -87,7 +87,7 @@ def _decompress_entities(data, expected_size):
     # Source stores the LZMA properties and sizes in its own header.
     header = properties + struct.pack("<Q", size)
     try:
-        decoder = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE, memlimit=64 * 1024 * 1024)
+        decoder = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
         entities = decoder.decompress(header + compressed, max_length=size + 1)
     except lzma.LZMAError:
         return None
