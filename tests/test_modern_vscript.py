@@ -254,6 +254,28 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(bsp.read_bytes(), original)
         self.assertEqual(prepared.read_bytes(), data)
 
+    def test_csgo_entity_lump_decodes_when_known_size_is_rejected(self):
+        # Simulate liblzma < 5.4, which rejects a known size followed by an end marker.
+        real = lzma.LZMADecompressor
+        calls = []
+
+        def old_liblzma(*args, **kwargs):
+            calls.append(None)
+            decoder = real(*args, **kwargs)
+            if len(calls) == 1:
+                decoder = mock.Mock(decompress=mock.Mock(side_effect=lzma.LZMAError("Corrupt input data")))
+            return decoder
+
+        mod = self.root / "csgo"
+        for suffix in (".mdl", ".vvd", ".dx90.vtx", ".phy"):
+            _write(mod / "models" / "props" / "srcbox" / f"srcbox{suffix}", suffix)
+        (mod / "maps").mkdir()
+        (mod / "maps" / "de_example.bsp").write_bytes(_map_with_entities(7, compressed=True))
+        with mock.patch("sourcebox.bridges.cube_precache.lzma.LZMADecompressor", side_effect=old_liblzma):
+            prepared = prepare_csgo_physics_map(mod, "de_example")
+        self.assertIn(b'"classname" "prop_physics_override"', prepared.read_bytes())
+        self.assertEqual(len(calls), 2)
+
     def test_csgo_installs_missing_addons_once_and_keeps_custom_configuration(self):
         mod = self.root / "legacy" / "csgo"
         gameinfo = _write(mod / "gameinfo.txt", "original")

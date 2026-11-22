@@ -84,14 +84,19 @@ def _decompress_entities(data, expected_size):
     compressed = data[SOURCE_LZMA_HEADER.size:]
     if magic != b"LZMA" or size != expected_size or compressed_size != len(compressed):
         return None
-    # Source stores the LZMA properties and sizes in its own header.
-    header = properties + struct.pack("<Q", size)
-    try:
-        decoder = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE, memlimit=64 * 1024 * 1024)
-        entities = decoder.decompress(header + compressed, max_length=size + 1)
-    except lzma.LZMAError:
-        return None
-    return entities if len(entities) == size else None
+    # Source stores the LZMA properties and sizes in its own header. Try the known
+    # size first; fall back to "unknown size" so streams that end with an
+    # end-of-payload marker also decode on liblzma releases older than 5.4.
+    for declared in (size, 0xFFFF_FFFF_FFFF_FFFF):
+        header = properties + struct.pack("<Q", declared)
+        try:
+            decoder = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE, memlimit=64 * 1024 * 1024)
+            entities = decoder.decompress(header + compressed, max_length=size + 1)
+        except lzma.LZMAError:
+            continue
+        if len(entities) == size:
+            return entities
+    return None
 
 
 def _precache_lump(map_path):
